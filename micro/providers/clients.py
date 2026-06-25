@@ -11,7 +11,7 @@ from http.client import RemoteDisconnected
 import urllib.error
 import urllib.request
 
-OPENAI_COMPATIBLE_USER_AGENT = "pico/0.1"
+OPENAI_COMPATIBLE_USER_AGENT = "micro/1.0"
 
 
 class FakeModelClient:

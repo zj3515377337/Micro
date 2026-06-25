@@ -25,7 +25,7 @@ def build_workspace(tmp_path):
 
 def build_agent(tmp_path, outputs, **kwargs):
     workspace = build_workspace(tmp_path)
-    store = SessionStore(tmp_path / ".micro" / "sessions")
+    store = SessionStore(tmp_path / ".pico" / "sessions")
     approval_policy = kwargs.pop("approval_policy", "auto")
     return Micro(
         model_client=FakeModelClient(outputs),
@@ -256,13 +256,13 @@ def test_invalid_risky_tool_does_not_prompt_for_approval(tmp_path):
 
 def test_list_files_hides_internal_agent_state(tmp_path):
     agent = build_agent(tmp_path, [])
-    (tmp_path / ".micro").mkdir(exist_ok=True)
+    (tmp_path / ".pico").mkdir(exist_ok=True)
     (tmp_path / ".git").mkdir(exist_ok=True)
     (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
 
     result = agent.run_tool("list_files", {})
 
-    assert ".micro" not in result
+    assert ".pico" not in result
     assert ".git" not in result
     assert "[F] hello.txt" in result
 
@@ -509,7 +509,7 @@ def test_large_tool_output_is_offloaded_to_scratch(tmp_path):
     assert ".pico/scratch/" in result.content
 
     # 验证 scratch 文件存在且包含完整内容（read_file 会加 # path 头 + 行号）
-    scratch_dir = tmp_path / ".micro" / "scratch"
+    scratch_dir = tmp_path / ".pico" / "scratch"
     scratch_files = list(scratch_dir.glob("*.txt"))
     assert len(scratch_files) == 1
     full_content = scratch_files[0].read_text(encoding="utf-8")
@@ -529,7 +529,7 @@ def test_small_tool_output_is_not_offloaded(tmp_path):
     assert "hello" in result.content
     assert "full output" not in result.content
     # 不应创建 scratch 目录
-    assert not (tmp_path / ".micro" / "scratch").exists()
+    assert not (tmp_path / ".pico" / "scratch").exists()
 
 
 def test_offload_creates_unique_filenames(tmp_path):
@@ -545,7 +545,7 @@ def test_offload_creates_unique_filenames(tmp_path):
     agent.current_task_state = type("TS", (), {"task_id": "task_A", "tool_steps": 2})()
     agent.execute_tool("read_file", {"path": "big.txt", "start": 1, "end": 9000})
 
-    scratch_files = list((tmp_path / ".micro" / "scratch").glob("*.txt"))
+    scratch_files = list((tmp_path / ".pico" / "scratch").glob("*.txt"))
     assert len(scratch_files) == 2
     assert scratch_files[0].name != scratch_files[1].name
 
@@ -1292,7 +1292,7 @@ def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     assert "MINI-CODING-AGENT" not in welcome
     assert "MINI CODING AGENT" not in welcome
     assert "micro" in welcome
-    assert "local coding agent" in welcome
+    assert "lightweight AI coding agent" in welcome
     assert "// READY" not in welcome
     assert "SLASH" not in welcome
     assert "READY      " not in welcome
@@ -1376,7 +1376,7 @@ def test_openai_compatible_client_posts_expected_responses_payload():
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
     assert captured["headers"]["Content-type"] == "application/json"
     assert captured["headers"]["Accept"] == "application/json"
-    assert captured["headers"]["User-agent"] == "micro/0.1"
+    assert captured["headers"]["User-agent"] == "micro/1.0"
     assert captured["body"] == {
         "model": "right.codes/codex-mini",
         "input": [
@@ -1960,7 +1960,7 @@ def test_successful_run_persists_run_artifacts_and_stop_reason(tmp_path):
 
     assert agent.ask("Do the thing") == "Finished."
 
-    runs_root = tmp_path / ".micro" / "runs"
+    runs_root = tmp_path / ".pico" / "runs"
     run_dirs = [path for path in runs_root.iterdir() if path.is_dir()]
     assert len(run_dirs) == 1
 
@@ -1999,7 +1999,7 @@ def test_trace_and_report_redact_secret_env_values(tmp_path):
 
         assert agent.ask("Mask the secret") == "Masked."
 
-    runs_root = tmp_path / ".micro" / "runs"
+    runs_root = tmp_path / ".pico" / "runs"
     run_dirs = [path for path in runs_root.iterdir() if path.is_dir()]
     assert len(run_dirs) == 1
 
@@ -2395,7 +2395,7 @@ def test_freshness_mismatch_creates_checkpoint_before_model_completion(tmp_path)
 
 def test_runtime_identity_persists_key_execution_metadata(tmp_path):
     workspace = build_workspace(tmp_path)
-    store = SessionStore(tmp_path / ".micro" / "sessions")
+    store = SessionStore(tmp_path / ".pico" / "sessions")
     agent = Micro(
         model_client=FakeModelClient(["<final>Done.</final>"]),
         workspace=workspace,
@@ -2534,9 +2534,9 @@ def test_explicit_memory_promotion_persists_durable_memory_topics(tmp_path):
 
     assert "Project convention:" in answer
 
-    index_path = tmp_path / ".micro" / "memory" / "MEMORY.md"
-    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
-    decisions_path = tmp_path / ".micro" / "memory" / "topics" / "key-decisions.md"
+    index_path = tmp_path / ".pico" / "memory" / "MEMORY.md"
+    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
+    decisions_path = tmp_path / ".pico" / "memory" / "topics" / "key-decisions.md"
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
 
     assert index_path.exists()
@@ -2565,8 +2565,8 @@ def test_explicit_memory_promotion_supports_chinese_intent_and_labels(tmp_path):
 
     assert "项目约定：" in answer
 
-    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
-    decisions_path = tmp_path / ".micro" / "memory" / "topics" / "key-decisions.md"
+    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
+    decisions_path = tmp_path / ".pico" / "memory" / "topics" / "key-decisions.md"
 
     assert "优先使用受约束工具，不要靠猜。" in conventions_path.read_text(encoding="utf-8")
     assert "持久记忆保持轻量、按 topic 管理。" in decisions_path.read_text(encoding="utf-8")
@@ -2586,8 +2586,8 @@ def test_explicit_memory_promotion_rejects_secret_shaped_and_transient_lines(tmp
     agent.ask("Capture these stable facts into durable memory.")
 
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
-    dependency_path = tmp_path / ".micro" / "memory" / "topics" / "dependency-facts.md"
+    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
+    dependency_path = tmp_path / ".pico" / "memory" / "topics" / "dependency-facts.md"
 
     assert report["durable_promotions"] == [
         "project-conventions: Use constrained tools instead of guessing.",
@@ -2613,7 +2613,7 @@ def test_explicit_memory_promotion_supersedes_matching_durable_fact(tmp_path):
     assert agent.ask("Capture this stable dependency fact into durable memory.") == "Dependency: Python runtime is 3.11."
     assert agent.ask("Save the updated dependency fact into durable memory.") == "Dependency: Python runtime is 3.12."
 
-    dependency_path = tmp_path / ".micro" / "memory" / "topics" / "dependency-facts.md"
+    dependency_path = tmp_path / ".pico" / "memory" / "topics" / "dependency-facts.md"
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
     text = dependency_path.read_text(encoding="utf-8")
 
@@ -2636,7 +2636,7 @@ def test_explicit_memory_promotion_dedupes_duplicate_durable_note(tmp_path):
     agent.ask("Capture the stable fact into durable memory.")
     agent.ask("Capture the stable fact into durable memory again.")
 
-    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
+    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
     text = conventions_path.read_text(encoding="utf-8")
 
     assert text.count("Use constrained tools instead of guessing.") == 1
@@ -2654,7 +2654,7 @@ def test_agent_records_model_cache_metadata_in_last_prompt_metadata(tmp_path):
             return super().complete(prompt, max_new_tokens, **kwargs)
 
     workspace = build_workspace(tmp_path)
-    store = SessionStore(tmp_path / ".micro" / "sessions")
+    store = SessionStore(tmp_path / ".pico" / "sessions")
     agent = Micro(
         model_client=CacheAwareFakeModelClient(["<final>Done.</final>"]),
         workspace=workspace,
