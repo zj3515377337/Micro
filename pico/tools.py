@@ -13,7 +13,7 @@ from .workspace import IGNORED_PATH_NAMES
 
 BASE_TOOL_SPECS = {
     "list_files": {
-        "schema": {"path": "str='.'"},
+        "schema": {"path": "str='.'", "max_entries": "int=200"},
         "risky": False,
         "description": "List files in the workspace.",
     },
@@ -210,12 +210,15 @@ def tool_list_files(context, args):
     path = context.path(args.get("path", "."))
     if not path.is_dir():
         raise ValueError("path is not a directory")
+    max_entries = int(args.get("max_entries", 200))
+    if max_entries < 1:
+        raise ValueError("max_entries must be >= 1")
     entries = [
         item for item in sorted(path.iterdir(), key=lambda item: (item.is_file(), item.name.lower()))
         if item.name not in IGNORED_PATH_NAMES
     ]
     lines = []
-    for entry in entries[:200]:
+    for entry in entries[:max_entries]:
         kind = "[D]" if entry.is_dir() else "[F]"
         lines.append(f"{kind} {entry.relative_to(context.root)}")
     return "\n".join(lines) or "(empty)"

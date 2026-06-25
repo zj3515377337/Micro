@@ -519,6 +519,32 @@ class Pico:
         return promoted, rejections, superseded
 
     def ask(self, user_message):
+        """Run the agent loop for a user message and return the result.
+
+        This is the primary entry point for interacting with a Pico instance.
+        It creates an :class:`AgentLoop`, runs it with the given user message,
+        and optionally extracts durable memory from the session history after
+        the loop completes.
+
+        Parameters
+        ----------
+        user_message : str
+            The user's input message to process.
+
+        Returns
+        -------
+        Any
+            The result returned by :meth:`AgentLoop.run`.
+
+        Side Effects
+        ------------
+        If the ``"memory"`` feature is enabled, this method will attempt to
+        extract reusable knowledge from the session history via
+        :meth:`Memory.run_playbook_extraction`. Promoted items that are not
+        already present in ``last_durable_promotions`` are appended to that
+        list. Extraction failures are silently ignored to avoid disrupting
+        the main flow.
+        """
         from .agent_loop import AgentLoop
 
         result = AgentLoop(self).run(user_message)

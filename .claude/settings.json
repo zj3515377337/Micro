@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import sys; print\\('sys.executable:', sys.executable\\); import os; print\\('CONDA_PREFIX:', os.environ.get\\('CONDA_PREFIX',''\\)\\); print\\('VIRTUAL_ENV:', os.environ.get\\('VIRTUAL_ENV',''\\)\\)\")",
+      "Bash(python -c \"from pico.cli import _build_thinking_client, build_arg_parser; parser = build_arg_parser\\(\\); args = parser.parse_args\\(['test']\\); client = _build_thinking_client\\(args, None\\); print\\('Thinking client:', type\\(client\\).__name__ if client else 'None \\(PICO_THINKING_MODEL not set or client creation failed\\)'\\)\")",
+      "Bash(python -m pytest tests/test_pico.py -q --tb=no -k \"not test_trace_and_report_redact\")",
+      "Bash(python -m pytest tests/test_pico.py -q --tb=line -k \"not test_trace_and_report_redact\")",
+      "Bash(python -m pytest tests/test_pico.py::test_build_agent_uses_deepseek_provider_by_default -v --tb=long)",
+      "Bash(python -m pytest tests/test_pico.py -q --tb=short)",
+      "Bash(python -m pytest tests/test_pico.py -q --tb=short -k \"not test_trace_and_report_redact\")",
+      "Bash(python -m pytest tests/test_pico.py -q --tb=no)"
+    ]
+  }
+}

@@ -351,11 +351,25 @@ class OpenAICompatibleModelClient:
 
 
 def _extract_anthropic_text(data):
-    for item in data.get("content", []):
-        if isinstance(item, dict) and item.get("type") == "text":
-            text = item.get("text")
-            if isinstance(text, str) and text:
-                return text
+    # Anthropic 标准格式: content = [{"type":"text","text":"..."}]
+    content = data.get("content", [])
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text" and item.get("text"):
+                    return item["text"]
+                # DeepSeek 兼容：type 可能是其他值
+                if item.get("text"):
+                    return item["text"]
+            if isinstance(item, str) and item:
+                return item
+    # 备选：检查 message.content 路径
+    for msg in data.get("choices", []):
+        msg_content = msg.get("message", {}).get("content", "")
+        if isinstance(msg_content, str) and msg_content:
+            return msg_content
     return ""
 
 
