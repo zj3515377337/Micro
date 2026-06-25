@@ -2,15 +2,15 @@ import json
 
 import pytest
 
-from pico import FakeModelClient, Pico, SessionStore, WorkspaceContext
-from pico.evaluation.evaluator import BenchmarkEvaluator, validate_benchmark
+from micro import FakeModelClient, Micro, SessionStore, WorkspaceContext
+from micro.evaluation.evaluator import BenchmarkEvaluator, validate_benchmark
 
 
 def build_agent(tmp_path, allowed_tools=None):
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     workspace = WorkspaceContext.build(tmp_path)
     store = SessionStore(tmp_path / ".pico" / "sessions")
-    return Pico(
+    return Micro(
         model_client=FakeModelClient(["<final>Done.</final>"]),
         workspace=workspace,
         session_store=store,

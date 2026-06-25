@@ -1,5 +1,5 @@
-from pico import FakeModelClient, Pico, SessionStore, WorkspaceContext
-from pico.context_manager import ContextManager
+from micro import FakeModelClient, Micro, SessionStore, WorkspaceContext
+from micro.context_manager import ContextManager
 
 
 def build_workspace(tmp_path):
@@ -11,7 +11,7 @@ def build_agent(tmp_path, outputs, **kwargs):
     workspace = build_workspace(tmp_path)
     store = SessionStore(tmp_path / ".pico" / "sessions")
     approval_policy = kwargs.pop("approval_policy", "auto")
-    return Pico(
+    return Micro(
         model_client=FakeModelClient(outputs),
         workspace=workspace,
         session_store=store,

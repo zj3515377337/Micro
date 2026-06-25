@@ -1,6 +1,6 @@
 """Agent 运行时核心逻辑。
 
-Pico 就是包在模型外面的控制循环：负责组 prompt、解析模型输出、
+Micro 就是包在模型外面的控制循环：负责组 prompt、解析模型输出、
 校验并执行工具、写 trace、更新工作记忆，以及在合适的时候停下来。
 """
 
@@ -60,10 +60,10 @@ DURABLE_MEMORY_LINE_PATTERNS = (
 )
 SECRET_SHAPED_TEXT_PATTERN = re.compile(r"(?i)(\b(api[_ -]?key|token|secret|password)\b|sk-[A-Za-z0-9_-]{6,})")
 
-__all__ = ["Pico", "SessionStore"]
+__all__ = ["Micro", "SessionStore"]
 
 
-class Pico:
+class Micro:
     def __init__(
         self,
         model_client,
@@ -521,7 +521,7 @@ class Pico:
     def ask(self, user_message):
         """Run the agent loop for a user message and return the result.
 
-        This is the primary entry point for interacting with a Pico instance.
+        This is the primary entry point for interacting with a Micro instance.
         It creates an :class:`AgentLoop`, runs it with the given user message,
         and optionally extracts durable memory from the session history after
         the loop completes.
@@ -679,7 +679,7 @@ class Pico:
 
     def spawn_delegate(self, args):
         task = str(args.get("task", "")).strip()
-        child = Pico(
+        child = Micro(
             model_client=self.model_client,
             workspace=self.workspace,
             session_store=self.session_store,
@@ -793,35 +793,35 @@ class Pico:
         # 1. <tool>...</tool> 里包 JSON，适合简短调用
         # 2. XML 风格属性/子标签，适合写文件这类多行内容
         if "<tool>" in raw and ("<final>" not in raw or raw.find("<tool>") < raw.find("<final>")):
-            body = Pico.extract(raw, "tool")
+            body = Micro.extract(raw, "tool")
             try:
                 payload = json.loads(body)
             except Exception:
-                return "retry", Pico.retry_notice("model returned malformed tool JSON")
+                return "retry", Micro.retry_notice("model returned malformed tool JSON")
             if not isinstance(payload, dict):
-                return "retry", Pico.retry_notice("tool payload must be a JSON object")
+                return "retry", Micro.retry_notice("tool payload must be a JSON object")
             if not str(payload.get("name", "")).strip():
-                return "retry", Pico.retry_notice("tool payload is missing a tool name")
+                return "retry", Micro.retry_notice("tool payload is missing a tool name")
             args = payload.get("args", {})
             if args is None:
                 payload["args"] = {}
             elif not isinstance(args, dict):
-                return "retry", Pico.retry_notice()
+                return "retry", Micro.retry_notice()
             return "tool", payload
         if "<tool" in raw and ("<final>" not in raw or raw.find("<tool") < raw.find("<final>")):
-            payload = Pico.parse_xml_tool(raw)
+            payload = Micro.parse_xml_tool(raw)
             if payload is not None:
                 return "tool", payload
-            return "retry", Pico.retry_notice()
+            return "retry", Micro.retry_notice()
         if "<final>" in raw:
-            final = Pico.extract(raw, "final").strip()
+            final = Micro.extract(raw, "final").strip()
             if final:
                 return "final", final
-            return "retry", Pico.retry_notice("model returned an empty <final> answer")
+            return "retry", Micro.retry_notice("model returned an empty <final> answer")
         raw = raw.strip()
         if raw:
             return "final", raw
-        return "retry", Pico.retry_notice("model returned an empty response")
+        return "retry", Micro.retry_notice("model returned an empty response")
 
     @staticmethod
     def retry_notice(problem=None):
@@ -840,7 +840,7 @@ class Pico:
         match = re.search(r"<tool(?P<attrs>[^>]*)>(?P<body>.*?)</tool>", raw, re.S)
         if not match:
             return None
-        attrs = Pico.parse_attrs(match.group("attrs"))
+        attrs = Micro.parse_attrs(match.group("attrs"))
         name = str(attrs.pop("name", "")).strip()
         if not name:
             return None
@@ -849,7 +849,7 @@ class Pico:
         args = dict(attrs)
         for key in ("content", "old_text", "new_text", "command", "task", "pattern", "path"):
             if f"<{key}>" in body:
-                args[key] = Pico.extract_raw(body, key)
+                args[key] = Micro.extract_raw(body, key)
 
         body_text = body.strip("\n")
         if name == "write_file" and "content" not in args and body_text:

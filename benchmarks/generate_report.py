@@ -1,4 +1,4 @@
-"""Pico 性能量化报告生成器。运行：python benchmarks/generate_report.py"""
+"""Micro 性能量化报告生成器。运行：python benchmarks/generate_report.py"""
 import json
 import subprocess
 from pathlib import Path
@@ -9,7 +9,7 @@ def run(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=WORKSPACE)
 
 print("=" * 60)
-print("Pico 编码智能体 — 改进后性能量化报告")
+print("Micro 编码智能体 — 改进后性能量化报告")
 print("=" * 60)
 print()
 

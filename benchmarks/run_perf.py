@@ -1,4 +1,4 @@
-"""Pico 性能评测 —— 通过 subprocess 调用 python -m pico"""
+"""Micro 性能评测 —— 通过 subprocess 调用 python -m pico"""
 import json, os, subprocess, sys, time
 from pathlib import Path
 

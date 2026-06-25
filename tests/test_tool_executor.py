@@ -1,12 +1,12 @@
-from pico import FakeModelClient, Pico, SessionStore, WorkspaceContext
-from pico.tool_executor import ToolExecutor, ToolExecutionResult
+from micro import FakeModelClient, Micro, SessionStore, WorkspaceContext
+from micro.tool_executor import ToolExecutor, ToolExecutionResult
 
 
 def build_agent(tmp_path):
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     workspace = WorkspaceContext.build(tmp_path)
     store = SessionStore(tmp_path / ".pico" / "sessions")
-    return Pico(
+    return Micro(
         model_client=FakeModelClient([]),
         workspace=workspace,
         session_store=store,

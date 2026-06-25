@@ -1,12 +1,12 @@
-from pico import FakeModelClient, Pico, SessionStore, WorkspaceContext
-from pico.agent_loop import AgentLoop
+from micro import FakeModelClient, Micro, SessionStore, WorkspaceContext
+from micro.agent_loop import AgentLoop
 
 
 def build_agent(tmp_path, outputs):
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
     workspace = WorkspaceContext.build(tmp_path)
     store = SessionStore(tmp_path / ".pico" / "sessions")
-    return Pico(
+    return Micro(
         model_client=FakeModelClient(outputs),
         workspace=workspace,
         session_store=store,

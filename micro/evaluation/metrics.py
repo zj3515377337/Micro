@@ -7,7 +7,7 @@ from pathlib import Path
 from ..config import load_project_env, provider_env
 from .evaluator import run_fixed_benchmark
 from ..providers.clients import AnthropicCompatibleModelClient, FakeModelClient, OpenAICompatibleModelClient
-from ..runtime import Pico, SessionStore
+from ..runtime import Micro, SessionStore
 from ..workspace import WorkspaceContext
 
 METRICS_SCHEMA_VERSION = 2
@@ -194,7 +194,7 @@ def build_stress_agent_metrics():
         (workspace_root / "README.md").write_text("demo\n", encoding="utf-8")
         workspace = WorkspaceContext.build(workspace_root)
         store = SessionStore(workspace_root / ".pico" / "sessions")
-        agent = Pico(
+        agent = Micro(
             model_client=FakeModelClient([]),
             workspace=workspace,
             session_store=store,
@@ -256,7 +256,7 @@ class _MemoryExperimentModelClient(FakeModelClient):
 def _build_memory_experiment_agent(workspace_root, expected_fact, filename):
     workspace = WorkspaceContext.build(workspace_root)
     store = SessionStore(workspace_root / ".pico" / "sessions")
-    return Pico(
+    return Micro(
         model_client=_MemoryExperimentModelClient(expected_fact, filename),
         workspace=workspace,
         session_store=store,
@@ -452,7 +452,7 @@ def run_context_stress_matrix(repetitions=5):
                         (workspace_root / "README.md").write_text("demo\n", encoding="utf-8")
                         workspace = WorkspaceContext.build(workspace_root)
                         store = SessionStore(workspace_root / ".pico" / "sessions")
-                        agent = Pico(
+                        agent = Micro(
                             model_client=FakeModelClient([]),
                             workspace=workspace,
                             session_store=store,
@@ -522,7 +522,7 @@ def run_context_stress_matrix(repetitions=5):
 def _security_agent(workspace_root, approval_policy="auto", read_only=False):
     workspace = WorkspaceContext.build(workspace_root)
     store = SessionStore(workspace_root / ".pico" / "sessions")
-    return Pico(
+    return Micro(
         model_client=FakeModelClient([]),
         workspace=workspace,
         session_store=store,
@@ -840,7 +840,7 @@ def _truncate_read_history(agent):
 def _build_real_agent(workspace_root, provider, approval_policy="auto", read_only=False):
     workspace = WorkspaceContext.build(workspace_root)
     store = SessionStore(workspace_root / ".pico" / "sessions")
-    return Pico(
+    return Micro(
         model_client=_make_provider_client(provider),
         workspace=workspace,
         session_store=store,
@@ -1154,7 +1154,7 @@ def render_resume_metrics_markdown(metrics):
     security = metrics["security_experiment"]
     provider_payload = metrics.get("provider_experiments", {})
     lines = [
-        "# Pico Resume Metrics",
+        "# Micro Resume Metrics",
         "",
         "## Key Numbers",
         f"- Experiment mode: {metrics.get('experiment_mode', 'synthetic')}",
@@ -1208,7 +1208,7 @@ def render_large_scale_experiment_report(metrics):
         or "unknown"
     )
     lines = [
-        "# Pico Large-Scale Experiment Report",
+        "# Micro Large-Scale Experiment Report",
         "",
         "## Executive Summary",
         (
@@ -1354,7 +1354,7 @@ RECOVERY_ABLATION_TASKS = [
 def _build_recovery_agent(workspace_root, required_fragments):
     workspace = WorkspaceContext.build(workspace_root)
     store = SessionStore(workspace_root / ".pico" / "sessions")
-    return Pico(
+    return Micro(
         model_client=_RecoveryScenarioModelClient(required_fragments, "recovery state restored."),
         workspace=workspace,
         session_store=store,
@@ -1629,7 +1629,7 @@ def write_benchmark_core_report(
 
     enabled_recovery = recovery["variants"]["resume_enabled"]["summary"]
     lines = [
-        "# Pico Benchmark Core Report",
+        "# Micro Benchmark Core Report",
         "",
         "这轮 benchmark 只收缩到 Harness regression、context ablation、working memory ablation 和 recovery ablation 四层，不把 provider、run aggregation 或 durable memory 的别的结论揉进来。",
         "",

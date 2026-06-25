@@ -1,6 +1,6 @@
-from pico.prompt_prefix import build_prompt_prefix, tool_signature
-from pico.tools import build_tool_registry
-from pico.workspace import WorkspaceContext
+from micro.prompt_prefix import build_prompt_prefix, tool_signature
+from micro.tools import build_tool_registry
+from micro.workspace import WorkspaceContext
 
 
 class _Agent:

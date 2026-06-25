@@ -44,7 +44,7 @@ def check_doom_loop(agent, name, args):
     由 ToolExecutor 将其作为工具执行结果返回（模型会在下一轮看到它）。
 
     参数：
-    - agent: Pico 实例，用于访问 session history
+    - agent: Micro 实例，用于访问 session history
     - name: 即将执行的工具名
     - args: 即将执行的工具参数
 

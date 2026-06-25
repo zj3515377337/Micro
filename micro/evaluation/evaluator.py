@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from ..features import memory as memorylib
 from ..providers.clients import FakeModelClient
-from ..runtime import Pico, SessionStore
+from ..runtime import Micro, SessionStore
 from ..run_store import RunStore
 from ..task_state import STOP_REASON_FINAL_ANSWER_RETURNED
 from ..tools import legal_tool_names
@@ -459,7 +459,7 @@ class BenchmarkEvaluator:
             model_client = self.model_client_factory(task=task, workspace=workspace)
         else:
             model_client = FakeModelClient(_scripted_outputs_for_task(task))
-        agent = Pico(
+        agent = Micro(
             model_client=model_client,
             workspace=workspace,
             session_store=session_store,

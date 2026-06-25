@@ -48,7 +48,7 @@ def generate_plan(agent, user_request):
     """用只读 Planner agent 探索代码库，返回结构化计划（markdown 字符串）。
 
     参数：
-    - agent: 父 Pico 实例（提供 model_client、workspace、session_store）
+    - agent: 父 Micro 实例（提供 model_client、workspace、session_store）
     - user_request: 用户的任务描述
 
     返回：plan_text (str)

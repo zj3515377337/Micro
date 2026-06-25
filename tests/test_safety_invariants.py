@@ -3,9 +3,9 @@ import shlex
 import sys
 from unittest.mock import patch
 
-from pico import FakeModelClient, Pico, SessionStore, WorkspaceContext
-from pico import cli as pico_cli
-from pico.task_state import TaskState
+from micro import FakeModelClient, Micro, SessionStore, WorkspaceContext
+from micro import cli as pico_cli
+from micro.task_state import TaskState
 
 
 def build_workspace(tmp_path):
@@ -17,7 +17,7 @@ def build_agent(tmp_path, outputs, **kwargs):
     workspace = build_workspace(tmp_path)
     store = SessionStore(tmp_path / ".pico" / "sessions")
     approval_policy = kwargs.pop("approval_policy", "auto")
-    return Pico(
+    return Micro(
         model_client=FakeModelClient(outputs),
         workspace=workspace,
         session_store=store,

@@ -5,11 +5,11 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pico as pico_pkg
-from pico import (
+import micro
+from micro import (
     AnthropicCompatibleModelClient,
     FakeModelClient,
-    Pico,
+    Micro,
     OllamaModelClient,
     OpenAICompatibleModelClient,
     SessionStore,
@@ -25,9 +25,9 @@ def build_workspace(tmp_path):
 
 def build_agent(tmp_path, outputs, **kwargs):
     workspace = build_workspace(tmp_path)
-    store = SessionStore(tmp_path / ".pico" / "sessions")
+    store = SessionStore(tmp_path / ".micro" / "sessions")
     approval_policy = kwargs.pop("approval_policy", "auto")
-    return Pico(
+    return Micro(
         model_client=FakeModelClient(outputs),
         workspace=workspace,
         session_store=store,
@@ -86,7 +86,7 @@ def test_agent_only_stores_reusable_epistemic_notes(tmp_path):
     assert not any(note["text"] == "Done." for note in notes)
     assert not any(note["text"] == "Done." for note in notes)
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>It is red.</final>"]),
         workspace=agent.workspace,
         session_store=agent.session_store,
@@ -112,7 +112,7 @@ def test_file_summary_cache_is_invalidated_on_out_of_band_edit_and_path_spelling
     assert "sample.txt: alpha" in agent.memory.render_memory_text()
     file_path.write_text("beta\n", encoding="utf-8")
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient([]),
         workspace=agent.workspace,
         session_store=agent.session_store,
@@ -195,7 +195,7 @@ def test_agent_saves_and_resumes_session(tmp_path):
     agent = build_agent(tmp_path, ["<final>First pass.</final>"])
     assert agent.ask("Start a session") == "First pass."
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>Resumed.</final>"]),
         workspace=agent.workspace,
         session_store=agent.session_store,
@@ -256,13 +256,13 @@ def test_invalid_risky_tool_does_not_prompt_for_approval(tmp_path):
 
 def test_list_files_hides_internal_agent_state(tmp_path):
     agent = build_agent(tmp_path, [])
-    (tmp_path / ".pico").mkdir(exist_ok=True)
+    (tmp_path / ".micro").mkdir(exist_ok=True)
     (tmp_path / ".git").mkdir(exist_ok=True)
     (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
 
     result = agent.run_tool("list_files", {})
 
-    assert ".pico" not in result
+    assert ".micro" not in result
     assert ".git" not in result
     assert "[F] hello.txt" in result
 
@@ -509,7 +509,7 @@ def test_large_tool_output_is_offloaded_to_scratch(tmp_path):
     assert ".pico/scratch/" in result.content
 
     # 验证 scratch 文件存在且包含完整内容（read_file 会加 # path 头 + 行号）
-    scratch_dir = tmp_path / ".pico" / "scratch"
+    scratch_dir = tmp_path / ".micro" / "scratch"
     scratch_files = list(scratch_dir.glob("*.txt"))
     assert len(scratch_files) == 1
     full_content = scratch_files[0].read_text(encoding="utf-8")
@@ -529,7 +529,7 @@ def test_small_tool_output_is_not_offloaded(tmp_path):
     assert "hello" in result.content
     assert "full output" not in result.content
     # 不应创建 scratch 目录
-    assert not (tmp_path / ".pico" / "scratch").exists()
+    assert not (tmp_path / ".micro" / "scratch").exists()
 
 
 def test_offload_creates_unique_filenames(tmp_path):
@@ -545,7 +545,7 @@ def test_offload_creates_unique_filenames(tmp_path):
     agent.current_task_state = type("TS", (), {"task_id": "task_A", "tool_steps": 2})()
     agent.execute_tool("read_file", {"path": "big.txt", "start": 1, "end": 9000})
 
-    scratch_files = list((tmp_path / ".pico" / "scratch").glob("*.txt"))
+    scratch_files = list((tmp_path / ".micro" / "scratch").glob("*.txt"))
     assert len(scratch_files) == 2
     assert scratch_files[0].name != scratch_files[1].name
 
@@ -555,7 +555,7 @@ def test_offload_creates_unique_filenames(tmp_path):
 
 def test_approval_store_default_rules_block_danger_commands(tmp_path):
     """内置危险规则自动拒绝 rm -rf / sudo / chmod 777。"""
-    from pico.approval_store import ApprovalStore
+    from micro.approval_store import ApprovalStore
 
     store = ApprovalStore(tmp_path)
     # rm -rf 应该被内置规则拦截
@@ -568,7 +568,7 @@ def test_approval_store_default_rules_block_danger_commands(tmp_path):
 
 def test_approval_store_add_command_rule(tmp_path):
     """添加 COMMAND 规则后，匹配的命令按规则决议。"""
-    from pico.approval_store import ApprovalStore
+    from micro.approval_store import ApprovalStore
 
     store = ApprovalStore(tmp_path)
     store.add("COMMAND", "pytest -q", "auto")
@@ -577,7 +577,7 @@ def test_approval_store_add_command_rule(tmp_path):
 
 def test_approval_store_add_prefix_rule(tmp_path):
     """PREFIX 规则匹配以指定前缀开头的命令。"""
-    from pico.approval_store import ApprovalStore
+    from micro.approval_store import ApprovalStore
 
     store = ApprovalStore(tmp_path)
     store.add("PREFIX", "git ", "ask")
@@ -589,7 +589,7 @@ def test_approval_store_add_prefix_rule(tmp_path):
 
 def test_approval_store_remove_rule(tmp_path):
     """删除用户规则后不再匹配。"""
-    from pico.approval_store import ApprovalStore
+    from micro.approval_store import ApprovalStore
 
     store = ApprovalStore(tmp_path)
     store.add("COMMAND", "pytest -q", "auto")
@@ -604,7 +604,7 @@ def test_approval_store_remove_rule(tmp_path):
 
 def test_approval_store_persists_across_instances(tmp_path):
     """规则持久化到磁盘，新实例能加载。"""
-    from pico.approval_store import ApprovalStore
+    from micro.approval_store import ApprovalStore
 
     store1 = ApprovalStore(tmp_path)
     store1.add("COMMAND", "npm test", "auto")
@@ -615,7 +615,7 @@ def test_approval_store_persists_across_instances(tmp_path):
 
 def test_approval_store_list_rules(tmp_path):
     """list_rules 返回带索引的规则列表。"""
-    from pico.approval_store import ApprovalStore
+    from micro.approval_store import ApprovalStore
 
     store = ApprovalStore(tmp_path)
     store.add("COMMAND", "pytest -q", "auto")
@@ -629,7 +629,7 @@ def test_approval_store_list_rules(tmp_path):
 
 def test_approval_store_non_shell_tools_return_none(tmp_path):
     """非 run_shell 工具不参与规则匹配，返回 None（交由全局策略）。"""
-    from pico.approval_store import ApprovalStore
+    from micro.approval_store import ApprovalStore
 
     store = ApprovalStore(tmp_path)
     store.add("COMMAND", "write", "auto")  # 这条规则不会被用到
@@ -639,8 +639,8 @@ def test_approval_store_non_shell_tools_return_none(tmp_path):
 
 
 def test_approval_integration_respects_persistent_rule(tmp_path):
-    """Pico.approve() 优先使用持久化规则。"""
-    from pico.approval_store import ApprovalStore
+    """Micro.approve() 优先使用持久化规则。"""
+    from micro.approval_store import ApprovalStore
 
     agent = build_agent(tmp_path, ["<final>ok</final>"], approval_policy="ask")
     agent.approval_store.add("COMMAND", "echo hello", "auto")
@@ -920,7 +920,7 @@ def test_plan_mode_generates_structured_plan(tmp_path):
             "<final>## Goal\nAdd logging to main.py\n\n## Context\nFound main() in src/main.py\n\n## Files to modify\n- src/main.py — add logging\n\n## New files\nNone\n\n## Steps\n1. Read src/main.py\n2. Add import logging\n3. Add logging.info() call\n\n## Verification\n- Run python src/main.py\n\n## Risks\nNone</final>",
         ],
     )
-    from pico.plan_mode import generate_plan
+    from micro.plan_mode import generate_plan
     plan = generate_plan(agent, "Add logging to main.py")
     assert "## Goal" in plan
     assert "## Steps" in plan
@@ -929,7 +929,7 @@ def test_plan_mode_generates_structured_plan(tmp_path):
 
 def test_extract_plan_from_output_handles_extra_text(tmp_path):
     """_extract_plan_from_output 提取以 ## Goal 开头的部分。"""
-    from pico.plan_mode import _extract_plan_from_output
+    from micro.plan_mode import _extract_plan_from_output
 
     raw = "Some chat text\n## Goal\nDo something.\n\n## Steps\n1. Step one"
     plan = _extract_plan_from_output(raw)
@@ -949,7 +949,7 @@ def test_plan_mode_planner_has_only_read_tools(tmp_path):
         "<final>## Goal\nAdd logging\n\n## Context\nfound main()\n\n## Files to modify\n- src/main.py\n\n## New files\nNone\n\n## Steps\n1. Read main.py\n2. Add logging\n\n## Verification\n- run it\n\n## Risks\nNone</final>",
     ]
     agent = build_agent(tmp_path, plan_outputs)
-    from pico.plan_mode import generate_plan
+    from micro.plan_mode import generate_plan
     plan_text = generate_plan(agent, "test task")
     assert plan_text
     assert "## Goal" in plan_text
@@ -957,7 +957,7 @@ def test_plan_mode_planner_has_only_read_tools(tmp_path):
 
 def test_active_plan_injected_into_prompt(tmp_path):
     """active_plan 内容被注入到 prompt prefix。"""
-    from pico.plan_mode import save_plan
+    from micro.plan_mode import save_plan
     agent = build_agent(tmp_path, ["<final>Executed plan.</final>"])
 
     plan_text = "## Goal\nTest plan\n\n## Steps\n1. Do something"
@@ -975,7 +975,7 @@ def test_active_plan_injected_into_prompt(tmp_path):
 
 def test_plan_mode_clear_plans(tmp_path):
     """clear_active_plan 清除所有计划文件。"""
-    from pico.plan_mode import save_plan
+    from micro.plan_mode import save_plan
 
     agent = build_agent(tmp_path, ["<final>ok</final>"])
     save_plan(agent.root, "## Goal\nSomething", "test")
@@ -1171,7 +1171,7 @@ def test_git_log_defaults_to_five_entries(tmp_path):
 
 def test_playbook_extracts_write_then_patch_correction(tmp_path):
     """B 类：write_file 后被 patch_file 修正 → 格式约定。"""
-    from pico.features.memory import _extract_playbook_candidates
+    from micro.features.memory import _extract_playbook_candidates
 
     history = [
         {"role": "tool", "name": "write_file", "args": {"path": "a.py", "content": "def f():pass"}, "content": "wrote a.py", "created_at": "t1"},
@@ -1184,7 +1184,7 @@ def test_playbook_extracts_write_then_patch_correction(tmp_path):
 
 def test_playbook_extracts_user_correction_as_preference(tmp_path):
     """C 类：用户消息含纠正关键词 → 偏好记录。"""
-    from pico.features.memory import _extract_playbook_candidates
+    from micro.features.memory import _extract_playbook_candidates
 
     history = [
         {"role": "user", "content": "请不要使用 class，用 dataclass 代替", "created_at": "t1"},
@@ -1196,7 +1196,7 @@ def test_playbook_extracts_user_correction_as_preference(tmp_path):
 
 def test_playbook_extracts_successful_test_command(tmp_path):
     """D 类：成功的测试命令 → 项目约定。"""
-    from pico.features.memory import _extract_playbook_candidates
+    from micro.features.memory import _extract_playbook_candidates
 
     history = [
         {"role": "tool", "name": "run_shell", "args": {"command": "pytest -q -x"},
@@ -1243,7 +1243,7 @@ def test_playbook_no_duplicate_candidates(tmp_path):
 
 def test_playbook_core_file_detected_for_structural_files(tmp_path):
     """A 类：高频读取的结构性文件被识别为核心文件。"""
-    from pico.features.memory import _extract_playbook_candidates
+    from micro.features.memory import _extract_playbook_candidates
 
     history = []
     for _ in range(3):
@@ -1270,7 +1270,7 @@ def test_planner_uses_dedicated_model_when_configured(tmp_path):
         planner_model_client=planner_fake,
     )
 
-    from pico.plan_mode import generate_plan
+    from micro.plan_mode import generate_plan
     plan = generate_plan(agent, "test")
     assert "## Goal" in plan
     # planner_fake 被消费了 → 确认用了 planner 专用模型
@@ -1278,7 +1278,7 @@ def test_planner_uses_dedicated_model_when_configured(tmp_path):
 
 
 def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
-    deep = tmp_path / "very" / "long" / "path" / "for" / "the" / "pico" / "agent" / "welcome" / "screen"
+    deep = tmp_path / "very" / "long" / "path" / "for" / "the" / "micro" / "agent" / "welcome" / "screen"
     deep.mkdir(parents=True)
     agent = build_agent(deep, [])
 
@@ -1291,7 +1291,7 @@ def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     assert "(  o o  )" in welcome
     assert "MINI-CODING-AGENT" not in welcome
     assert "MINI CODING AGENT" not in welcome
-    assert "pico" in welcome
+    assert "micro" in welcome
     assert "local coding agent" in welcome
     assert "// READY" not in welcome
     assert "SLASH" not in welcome
@@ -1376,7 +1376,7 @@ def test_openai_compatible_client_posts_expected_responses_payload():
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
     assert captured["headers"]["Content-type"] == "application/json"
     assert captured["headers"]["Accept"] == "application/json"
-    assert captured["headers"]["User-agent"] == "pico/0.1"
+    assert captured["headers"]["User-agent"] == "micro/0.1"
     assert captured["body"] == {
         "model": "right.codes/codex-mini",
         "input": [
@@ -1651,11 +1651,11 @@ def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
         clear=False,
     ):
         with patch(
-            "pico.cli.OllamaModelClient",
+            "micro.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
-        ), patch("pico.cli.OpenAICompatibleModelClient") as mock_openai:
+        ), patch("micro.cli.OpenAICompatibleModelClient") as mock_openai:
             fake_client = mock_openai.return_value
-            agent = pico_pkg.build_agent(args)
+            agent = micro.build_agent(args)
 
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["model"] == "override-model"
@@ -1688,11 +1688,11 @@ def test_build_agent_uses_right_codes_shared_key_for_openai_provider(tmp_path):
 
     with patch.dict(os.environ, {"PICO_RIGHT_CODES_API_KEY": "sk-right-codes"}, clear=True):
         with patch(
-            "pico.cli.OllamaModelClient",
+            "micro.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
-        ), patch("pico.cli.OpenAICompatibleModelClient") as mock_openai:
+        ), patch("micro.cli.OpenAICompatibleModelClient") as mock_openai:
             fake_client = mock_openai.return_value
-            agent = pico_pkg.build_agent(args)
+            agent = micro.build_agent(args)
 
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["api_key"] == "sk-right-codes"
@@ -1700,19 +1700,19 @@ def test_build_agent_uses_right_codes_shared_key_for_openai_provider(tmp_path):
 
 
 def test_build_arg_parser_leaves_provider_unset_for_runtime_resolution(tmp_path):
-    args = pico_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
+    args = micro.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
 
     assert args.provider is None
 
 
 def test_build_arg_parser_accepts_anthropic_provider(tmp_path):
-    args = pico_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "anthropic"])
+    args = micro.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "anthropic"])
 
     assert args.provider == "anthropic"
 
 
 def test_build_arg_parser_accepts_deepseek_provider(tmp_path):
-    args = pico_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
+    args = micro.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
 
     assert args.provider == "deepseek"
 
@@ -1731,18 +1731,18 @@ def test_build_agent_uses_project_env_provider_when_cli_omitted(tmp_path):
         + "\n",
         encoding="utf-8",
     )
-    args = pico_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
+    args = micro.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "pico.cli.OllamaModelClient",
+            "micro.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "pico.cli.AnthropicCompatibleModelClient",
+            "micro.cli.AnthropicCompatibleModelClient",
             side_effect=AssertionError("deepseek client should not be used"),
-        ), patch("pico.cli.OpenAICompatibleModelClient") as mock_openai:
+        ), patch("micro.cli.OpenAICompatibleModelClient") as mock_openai:
             fake_client = mock_openai.return_value
-            agent = pico_pkg.build_agent(args)
+            agent = micro.build_agent(args)
 
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["model"] == "gpt-5.4"
@@ -1765,20 +1765,20 @@ def test_build_agent_prefers_cli_provider_over_project_env_provider(tmp_path):
         + "\n",
         encoding="utf-8",
     )
-    args = pico_pkg.build_arg_parser().parse_args(
+    args = micro.build_arg_parser().parse_args(
         ["--cwd", str(tmp_path), "--provider", "deepseek"]
     )
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "pico.cli.OllamaModelClient",
+            "micro.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "pico.cli.OpenAICompatibleModelClient",
+            "micro.cli.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("pico.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("micro.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
-            agent = pico_pkg.build_agent(args)
+            agent = micro.build_agent(args)
 
     mock_anthropic.assert_called_once()
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
@@ -1817,14 +1817,14 @@ def test_build_agent_uses_anthropic_provider_and_openai_key_fallback(tmp_path):
         clear=True,
     ):
         with patch(
-            "pico.cli.OllamaModelClient",
+            "micro.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "pico.cli.OpenAICompatibleModelClient",
+            "micro.cli.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("pico.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("micro.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
-            agent = pico_pkg.build_agent(args)
+            agent = micro.build_agent(args)
 
     mock_anthropic.assert_called_once()
     assert mock_anthropic.call_args.kwargs["model"] == "claude-sonnet-4-5-20250929"
@@ -1834,7 +1834,7 @@ def test_build_agent_uses_anthropic_provider_and_openai_key_fallback(tmp_path):
 
 
 def test_build_agent_uses_anthropic_default_model_when_env_is_missing(tmp_path):
-    args = pico_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "anthropic"])
+    args = micro.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "anthropic"])
 
     with patch.dict(
         os.environ,
@@ -1842,8 +1842,8 @@ def test_build_agent_uses_anthropic_default_model_when_env_is_missing(tmp_path):
         clear=False,
     ):
         os.environ.pop("ANTHROPIC_MODEL", None)
-        with patch("pico.cli.AnthropicCompatibleModelClient") as mock_anthropic:
-            pico_pkg.build_agent(args)
+        with patch("micro.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+            micro.build_agent(args)
 
     assert mock_anthropic.call_args.kwargs["model"] == "claude-sonnet-4-6"
 
@@ -1893,14 +1893,14 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
         clear=True,
     ):
         with patch(
-            "pico.cli.OllamaModelClient",
+            "micro.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "pico.cli.OpenAICompatibleModelClient",
+            "micro.cli.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("pico.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("micro.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
-            agent = pico_pkg.build_agent(args)
+            agent = micro.build_agent(args)
 
     mock_anthropic.assert_called_once()
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
@@ -1910,18 +1910,18 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
 
 
 def test_build_agent_uses_deepseek_default_model_when_env_is_missing(tmp_path):
-    args = pico_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
+    args = micro.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
 
     with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek"}, clear=True):
-        with patch("pico.cli.AnthropicCompatibleModelClient") as mock_anthropic:
-            pico_pkg.build_agent(args)
+        with patch("micro.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+            micro.build_agent(args)
 
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
 
 
 def test_build_agent_uses_deepseek_provider_by_default(tmp_path):
-    args = pico_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
+    args = micro.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
 
     with patch.dict(
         os.environ,
@@ -1932,14 +1932,14 @@ def test_build_agent_uses_deepseek_provider_by_default(tmp_path):
         clear=False,
     ):
         with patch(
-            "pico.cli.OllamaModelClient",
+            "micro.cli.OllamaModelClient",
             side_effect=AssertionError("ollama client should not be used"),
         ), patch(
-            "pico.cli.OpenAICompatibleModelClient",
+            "micro.cli.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("pico.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        ), patch("micro.cli.AnthropicCompatibleModelClient") as mock_anthropic:
             fake_client = mock_anthropic.return_value
-            agent = pico_pkg.build_agent(args)
+            agent = micro.build_agent(args)
 
     mock_anthropic.assert_called_once()
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-pro"
@@ -1960,7 +1960,7 @@ def test_successful_run_persists_run_artifacts_and_stop_reason(tmp_path):
 
     assert agent.ask("Do the thing") == "Finished."
 
-    runs_root = tmp_path / ".pico" / "runs"
+    runs_root = tmp_path / ".micro" / "runs"
     run_dirs = [path for path in runs_root.iterdir() if path.is_dir()]
     assert len(run_dirs) == 1
 
@@ -1999,7 +1999,7 @@ def test_trace_and_report_redact_secret_env_values(tmp_path):
 
         assert agent.ask("Mask the secret") == "Masked."
 
-    runs_root = tmp_path / ".pico" / "runs"
+    runs_root = tmp_path / ".micro" / "runs"
     run_dirs = [path for path in runs_root.iterdir() if path.is_dir()]
     assert len(run_dirs) == 1
 
@@ -2158,7 +2158,7 @@ def test_resume_prompt_uses_checkpoint_state_not_just_history(tmp_path):
     }
     agent.session_store.save(agent.session)
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>Resumed.</final>"]),
         workspace=build_workspace(tmp_path),
         session_store=agent.session_store,
@@ -2204,7 +2204,7 @@ def test_resume_invalidates_stale_file_summaries_and_marks_partial_stale(tmp_pat
     agent.session_store.save(agent.session)
     file_path.write_text("beta\n", encoding="utf-8")
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>Resumed.</final>"]),
         workspace=build_workspace(tmp_path),
         session_store=agent.session_store,
@@ -2260,7 +2260,7 @@ def test_resume_marks_workspace_mismatch_when_checkpoint_runtime_identity_is_sta
     }
     agent.session_store.save(agent.session)
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>Resumed.</final>"]),
         workspace=build_workspace(tmp_path),
         session_store=agent.session_store,
@@ -2322,7 +2322,7 @@ def test_resume_marks_schema_mismatch_when_checkpoint_version_is_incompatible(tm
     }
     agent.session_store.save(agent.session)
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>Resumed.</final>"]),
         workspace=build_workspace(tmp_path),
         session_store=agent.session_store,
@@ -2339,7 +2339,7 @@ def test_resume_marks_no_checkpoint_when_session_has_no_checkpoint_state(tmp_pat
     agent.session.pop("checkpoints", None)
     agent.session_store.save(agent.session)
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>Resumed.</final>"]),
         workspace=build_workspace(tmp_path),
         session_store=agent.session_store,
@@ -2395,8 +2395,8 @@ def test_freshness_mismatch_creates_checkpoint_before_model_completion(tmp_path)
 
 def test_runtime_identity_persists_key_execution_metadata(tmp_path):
     workspace = build_workspace(tmp_path)
-    store = SessionStore(tmp_path / ".pico" / "sessions")
-    agent = Pico(
+    store = SessionStore(tmp_path / ".micro" / "sessions")
+    agent = Micro(
         model_client=FakeModelClient(["<final>Done.</final>"]),
         workspace=workspace,
         session_store=store,
@@ -2455,7 +2455,7 @@ def test_resume_records_runtime_identity_mismatch_fields_in_metadata_and_trace(t
     }
     agent.session_store.save(agent.session)
 
-    resumed = Pico.from_session(
+    resumed = Micro.from_session(
         model_client=FakeModelClient(["<final>Resumed.</final>"]),
         workspace=build_workspace(tmp_path),
         session_store=agent.session_store,
@@ -2534,9 +2534,9 @@ def test_explicit_memory_promotion_persists_durable_memory_topics(tmp_path):
 
     assert "Project convention:" in answer
 
-    index_path = tmp_path / ".pico" / "memory" / "MEMORY.md"
-    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
-    decisions_path = tmp_path / ".pico" / "memory" / "topics" / "key-decisions.md"
+    index_path = tmp_path / ".micro" / "memory" / "MEMORY.md"
+    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
+    decisions_path = tmp_path / ".micro" / "memory" / "topics" / "key-decisions.md"
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
 
     assert index_path.exists()
@@ -2565,8 +2565,8 @@ def test_explicit_memory_promotion_supports_chinese_intent_and_labels(tmp_path):
 
     assert "项目约定：" in answer
 
-    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
-    decisions_path = tmp_path / ".pico" / "memory" / "topics" / "key-decisions.md"
+    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
+    decisions_path = tmp_path / ".micro" / "memory" / "topics" / "key-decisions.md"
 
     assert "优先使用受约束工具，不要靠猜。" in conventions_path.read_text(encoding="utf-8")
     assert "持久记忆保持轻量、按 topic 管理。" in decisions_path.read_text(encoding="utf-8")
@@ -2586,8 +2586,8 @@ def test_explicit_memory_promotion_rejects_secret_shaped_and_transient_lines(tmp
     agent.ask("Capture these stable facts into durable memory.")
 
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
-    dependency_path = tmp_path / ".pico" / "memory" / "topics" / "dependency-facts.md"
+    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
+    dependency_path = tmp_path / ".micro" / "memory" / "topics" / "dependency-facts.md"
 
     assert report["durable_promotions"] == [
         "project-conventions: Use constrained tools instead of guessing.",
@@ -2613,7 +2613,7 @@ def test_explicit_memory_promotion_supersedes_matching_durable_fact(tmp_path):
     assert agent.ask("Capture this stable dependency fact into durable memory.") == "Dependency: Python runtime is 3.11."
     assert agent.ask("Save the updated dependency fact into durable memory.") == "Dependency: Python runtime is 3.12."
 
-    dependency_path = tmp_path / ".pico" / "memory" / "topics" / "dependency-facts.md"
+    dependency_path = tmp_path / ".micro" / "memory" / "topics" / "dependency-facts.md"
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
     text = dependency_path.read_text(encoding="utf-8")
 
@@ -2636,7 +2636,7 @@ def test_explicit_memory_promotion_dedupes_duplicate_durable_note(tmp_path):
     agent.ask("Capture the stable fact into durable memory.")
     agent.ask("Capture the stable fact into durable memory again.")
 
-    conventions_path = tmp_path / ".pico" / "memory" / "topics" / "project-conventions.md"
+    conventions_path = tmp_path / ".micro" / "memory" / "topics" / "project-conventions.md"
     text = conventions_path.read_text(encoding="utf-8")
 
     assert text.count("Use constrained tools instead of guessing.") == 1
@@ -2654,8 +2654,8 @@ def test_agent_records_model_cache_metadata_in_last_prompt_metadata(tmp_path):
             return super().complete(prompt, max_new_tokens, **kwargs)
 
     workspace = build_workspace(tmp_path)
-    store = SessionStore(tmp_path / ".pico" / "sessions")
-    agent = Pico(
+    store = SessionStore(tmp_path / ".micro" / "sessions")
+    agent = Micro(
         model_client=CacheAwareFakeModelClient(["<final>Done.</final>"]),
         workspace=workspace,
         session_store=store,
@@ -2696,11 +2696,11 @@ def test_recent_transcript_entries_stay_richer_than_older_ones(tmp_path):
 def test_public_api_exports_resolve_through_package_path():
     assert callable(build_welcome)
     assert FakeModelClient is not None
-    assert Pico is not None
+    assert Micro is not None
     assert OllamaModelClient is not None
     assert SessionStore is not None
     assert WorkspaceContext is not None
-    assert Path(pico_pkg.__file__).as_posix().endswith("/pico/__init__.py")
+    assert Path(micro.__file__).as_posix().endswith("/micro/__init__.py")
 
 
 def test_reviewer_skeleton_docs_exist():
@@ -2722,14 +2722,14 @@ def test_reviewer_skeleton_docs_exist():
 
 
 def test_package_import_surface_includes_cli_entrypoints():
-    assert callable(pico_pkg.main)
-    assert callable(pico_pkg.build_agent)
-    assert callable(pico_pkg.build_arg_parser)
+    assert callable(micro.main)
+    assert callable(micro.build_agent)
+    assert callable(micro.build_arg_parser)
 
 
 def test_module_execution_help_works():
     result = subprocess.run(
-        [sys.executable, "-m", "pico", "--help"],
+        [sys.executable, "-m", "micro", "--help"],
         capture_output=True,
         text=True,
     )

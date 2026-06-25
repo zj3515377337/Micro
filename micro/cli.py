@@ -13,7 +13,7 @@ import textwrap
 
 from .config import load_project_env, provider_env
 from .providers.clients import AnthropicCompatibleModelClient, OllamaModelClient, OpenAICompatibleModelClient
-from .runtime import Pico, SessionStore
+from .runtime import Micro, SessionStore
 from .workspace import WorkspaceContext, middle
 
 DEFAULT_SECRET_ENV_NAMES = (
@@ -37,8 +37,8 @@ WELCOME_ART = (
     "       /   ^   \\\\",
     "      /|       |\\\\",
 )
-WELCOME_NAME = "pico"
-WELCOME_SUBTITLE = "local coding agent"
+WELCOME_NAME = "micro"
+WELCOME_SUBTITLE = "lightweight AI coding agent"
 WELCOME_STATUS = "calm shell, ready for work"
 HELP_DETAILS = textwrap.dedent(
     """\
@@ -453,7 +453,7 @@ def build_welcome(agent, model, host):
 
 
 def build_agent(args):
-    """根据 CLI 参数装配出一个可运行的 Pico 实例。
+    """根据 CLI 参数装配出一个可运行的 Micro 实例。
 
     为什么存在：
     命令行参数只是字符串和开关，runtime 需要的是已经装配好的对象图：
@@ -462,7 +462,7 @@ def build_agent(args):
 
     输入 / 输出：
     - 输入：`argparse` 解析后的 `args`
-    - 输出：一个新的 `Pico`，或一个从旧 session 恢复出来的 `Pico`
+    - 输出：一个新的 `Micro`，或一个从旧 session 恢复出来的 `Micro`
 
     在 agent 链路里的位置：
     它是整个程序启动链路里最靠近 runtime 的装配点。`main()` 先调它，
@@ -482,7 +482,7 @@ def build_agent(args):
     if session_id == "latest":
         session_id = store.latest()
     if session_id:
-        return Pico.from_session(
+        return Micro.from_session(
             model_client=model,
             workspace=workspace,
             session_store=store,
@@ -495,7 +495,7 @@ def build_agent(args):
             critique_model_client=critique_model,
             planner_model_client=planner_model,
         )
-    return Pico(
+    return Micro(
         model_client=model,
         workspace=workspace,
         session_store=store,
@@ -576,7 +576,7 @@ def main(argv=None):
         # 交互模式：每次读取一条用户输入，交给同一个 agent，
         # 因此 session history 和 working memory 会跨轮延续。
         try:
-            user_input = input("\npico> ").strip()
+            user_input = input("\nmicro> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("")
             return 0

@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pico"
-version = "0.1.0"
-description = "Small local coding agent for DeepSeek, OpenAI-compatible, Anthropic-compatible, and Ollama models"
+name = "micro"
+version = "1.0.0"
+description = "轻量终端 AI 编码助手，支持多模型协作（Thinking/Critique/Planner）"
 requires-python = ">=3.10"
 dependencies = []
 
 [project.scripts]
-pico = "pico.cli:main"
+micro = "micro.cli:main"
 
 [dependency-groups]
 dev = [
@@ -19,7 +19,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["pico*"]
+include = ["micro*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

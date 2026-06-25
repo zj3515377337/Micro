@@ -21,8 +21,8 @@
 ```bash
 uv run python - <<'PY'
 from pathlib import Path
-from pico.evaluation.evaluator import run_harness_regression_v2
-from pico.evaluation.metrics import (
+from micro.evaluation.evaluator import run_harness_regression_v2
+from micro.evaluation.metrics import (
     run_context_ablation_v2,
     run_memory_ablation_v2,
     run_recovery_ablation_v2,
