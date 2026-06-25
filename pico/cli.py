@@ -319,14 +319,9 @@ def _build_optional_client(args, action_client, model_env, api_key_env, base_url
 
 
 def _build_thinking_client(args, action_client):
-    """构建 thinking 模型客户端。未配置时返回 None。"""
-    return _build_optional_client(
-        args, action_client,
-        model_env="PICO_THINKING_MODEL",
-        api_key_env="PICO_THINKING_API_KEY",
-        base_url_env="PICO_THINKING_API_BASE",
-        provider_env_name="PICO_THINKING_PROVIDER",
-    )
+    return _build_optional_client(args, action_client,
+        model_env="PICO_THINKING_MODEL", api_key_env="PICO_THINKING_API_KEY",
+        base_url_env="PICO_THINKING_API_BASE", provider_env_name="PICO_THINKING_PROVIDER")
 
 
 def _build_critique_client(args, action_client):

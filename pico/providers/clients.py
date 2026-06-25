@@ -452,4 +452,4 @@ class AnthropicCompatibleModelClient:
         text = _extract_anthropic_text(data)
         if text:
             return text
-        raise RuntimeError("Anthropic-compatible error: could not extract text from response")
+        raise RuntimeError(f"Anthropic-compatible: no text. keys={list(data.keys())[:10]} content_type={type(data.get('content')).__name__} body[:300]={body_text[:300]}")

@@ -203,9 +203,8 @@ class AgentLoop:
                             except Exception:
                                 pass
 
-                except Exception:
-                    # thinking 失败不影响主流程
-                    pass
+                except Exception as exc:
+                    agent.emit_trace(task_state, "thinking_failed", {"error": str(exc)[:200]})
 
             agent.emit_trace(
                 task_state,
