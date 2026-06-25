@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "description": "Pico performance benchmark — 8 tasks for real-LLM evaluation",
+  "tasks": [
+    {
+      "id": "perf_simple_qa",
+      "prompt": "列出 pico/runtime.py 中 Pico 类的所有公开方法名称。只读，不要修改任何文件。",
+      "max_steps": 4,
+      "category": "basic-qa"
+    },
+    {
+      "id": "perf_code_explore",
+      "prompt": "检查 pico/cli.py 中 build_agent 函数，告诉我它接受哪些参数、每个参数的类型和默认值。只读。",
+      "max_steps": 6,
+      "category": "exploration"
+    },
+    {
+      "id": "perf_file_info",
+      "prompt": "使用 file_info 工具查看 pico/context_manager.py，然后用 glob 找出 pico/ 目录下所有 .py 文件，最后用 grep_count 统计整个项目中 'TODO' 出现了多少次。",
+      "max_steps": 6,
+      "category": "tool-usage"
+    },
+    {
+      "id": "perf_git_history",
+      "prompt": "使用 git_log 查看最近 3 次提交记录，然后用 git_diff 查看当前工作区有哪些未提交的变更。",
+      "max_steps": 4,
+      "category": "tool-usage"
+    },
+    {
+      "id": "perf_edit_verify",
+      "prompt": "在 pico/tools.py 文件末尾添加一行空白注释 '# Performance benchmark marker'，然后用 git_diff 确认只有这一行变更。",
+      "max_steps": 6,
+      "category": "edit-verify"
+    },
+    {
+      "id": "perf_multi_step_refactor",
+      "prompt": "读取 pico/runtime.py 中 Pico 类的 ask 方法，阅读它的实现，然后给该方法添加一个详细的 docstring。修改完成后读取修改后的方法确认 docstring 已添加。",
+      "max_steps": 8,
+      "category": "refactoring"
+    },
+    {
+      "id": "perf_cross_file_refactor",
+      "prompt": "在 pico/features/ 目录下新建一个 readme_benchmark.md 文件，内容为 'Pico Feature Modules'，然后验证文件创建成功并用 git_diff 查看变更。",
+      "max_steps": 8,
+      "category": "refactoring"
+    },
+    {
+      "id": "perf_doom_loop_resist",
+      "prompt": "读取 pico/runtime.py 的前 30 行，然后读它的前 40 行，然后读它的前 50 行，然后读它的前 60 行。每次读完告诉我文件第 1 行的内容。",
+      "max_steps": 6,
+      "category": "recovery"
+    }
+  ]
+}
