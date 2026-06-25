@@ -1,6 +1,8 @@
 """Security and redaction helpers for runtime artifacts."""
 
 import os
+import sys
+from pathlib import Path
 
 SENSITIVE_ENV_NAME_MARKERS = ("API_KEY", "TOKEN", "SECRET", "PASSWORD")
 REDACTED_VALUE = "<redacted>"
@@ -97,4 +99,9 @@ def shell_env(env=None, allowlist=(), root="."):
     filtered["PWD"] = str(root)
     if "PATH" not in filtered and env.get("PATH"):
         filtered["PATH"] = env["PATH"]
+    # 确保子进程找到的是当前 conda 环境的 Python，而非系统损坏的版本
+    python_dir = str(Path(sys.executable).parent)
+    existing_path = filtered.get("PATH", "")
+    if python_dir not in existing_path:
+        filtered["PATH"] = python_dir + os.pathsep + existing_path if existing_path else python_dir
     return filtered

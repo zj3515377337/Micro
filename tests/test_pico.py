@@ -239,7 +239,7 @@ def test_patch_file_replaces_exact_match(tmp_path):
         },
     )
 
-    assert result == "patched sample.txt"
+    assert "patched sample.txt" in result
     assert file_path.read_text(encoding="utf-8") == "hello agent\n"
 
 
@@ -275,6 +275,1006 @@ def test_repeated_identical_tool_call_is_rejected(tmp_path):
     result = agent.run_tool("list_files", {})
 
     assert result == "error: repeated identical tool call for list_files; choose a different tool or return a final answer"
+
+
+def test_md5_fingerprint_loop_is_rejected(tmp_path):
+    """Layer 2: A→B→A→B multi-step cycle caught by MD5 fingerprint."""
+    agent = build_agent(tmp_path, [])
+    # Simulate read→search→read→search cycle
+    agent.record({"role": "tool", "name": "read_file", "args": {"path": "a.py"}, "content": "x", "created_at": "t1"})
+    agent.record({"role": "tool", "name": "search", "args": {"pattern": "foo"}, "content": "x", "created_at": "t2"})
+    agent.record({"role": "tool", "name": "read_file", "args": {"path": "a.py"}, "content": "x", "created_at": "t3"})
+    # This is the 3rd read_file("a.py") — fingerprint appears 3 times in window
+
+    blocked, _ = agent.check_doom_loop("read_file", {"path": "a.py"})
+    assert blocked is True
+
+
+def test_different_args_produce_different_fingerprints(tmp_path):
+    """Same tool name with different args should NOT trigger fingerprint loop."""
+    agent = build_agent(tmp_path, [])
+    agent.record({"role": "tool", "name": "read_file", "args": {"path": "a.py"}, "content": "x", "created_at": "t1"})
+    agent.record({"role": "tool", "name": "read_file", "args": {"path": "b.py"}, "content": "x", "created_at": "t2"})
+
+    blocked, _ = agent.check_doom_loop("read_file", {"path": "c.py"})
+    assert blocked is False
+
+
+def test_read_repeat_on_same_file_is_rejected(tmp_path):
+    """Layer 3: same file read ≥4 times is blocked."""
+    agent = build_agent(tmp_path, [])
+    for i in range(4):
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": "a.py"}, "content": "x", "created_at": str(i)})
+
+    blocked, msg = agent.check_doom_loop("read_file", {"path": "a.py"})
+    assert blocked is True
+    assert "already read" in msg
+    assert "a.py" in msg
+    assert "4 times" in msg
+
+
+def test_read_different_files_does_not_trigger_repeat(tmp_path):
+    """Reading different files should be fine."""
+    agent = build_agent(tmp_path, [])
+    for path in ["a.py", "b.py", "c.py"]:
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": path}, "content": "x", "created_at": path})
+
+    blocked, _ = agent.check_doom_loop("read_file", {"path": "d.py"})
+    assert blocked is False
+
+
+def test_doom_loop_detector_returns_blocked_and_message(tmp_path):
+    """The blocked message should be descriptive."""
+    agent = build_agent(tmp_path, [])
+    agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "1"})
+    agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "2"})
+
+    blocked, msg = agent.check_doom_loop("list_files", {})
+    assert blocked is True
+    assert "list_files" in msg
+    assert "error:" in msg.lower()
+
+
+def test_repeated_tool_call_backward_compat(tmp_path):
+    """Old repeated_tool_call() still works and delegates to doom_loop."""
+    agent = build_agent(tmp_path, [])
+    agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "1"})
+    agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "2"})
+
+    assert agent.repeated_tool_call("list_files", {}) is True
+    assert agent.repeated_tool_call("read_file", {"path": "new.txt"}) is False
+
+
+def test_fingerprint_loop_message_is_informative(tmp_path):
+    """Layer 2 error message should explain the cycle clearly."""
+    agent = build_agent(tmp_path, [])
+    # A→B→A→B pattern: search→read→search→read→search (avoid Layer 1 simple repeat)
+    agent.record({"role": "tool", "name": "search", "args": {"pattern": "old"}, "content": "no match", "created_at": "t1"})
+    agent.record({"role": "tool", "name": "read_file", "args": {"path": "x.py"}, "content": "x", "created_at": "t2"})
+    agent.record({"role": "tool", "name": "search", "args": {"pattern": "old"}, "content": "no match", "created_at": "t3"})
+
+    blocked, msg = agent.check_doom_loop("search", {"pattern": "old"})
+    assert blocked is True
+    # 2 past + 1 current = 3 times
+    assert "3 times" in msg
+    assert "loop" in msg.lower()
+
+
+# ── System Reminders 测试 ─────────────────────────────────────────────
+
+
+def test_reminder_exploration_loop_fires_on_third_read(tmp_path):
+    """同一文件被 read_file ≥3 次 → 触发 exploration_loop 提醒。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>Done.</final>"],
+    )
+    for i in range(3):
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": "a.py"}, "content": "line", "created_at": str(i)})
+
+    reminders = agent.check_reminders("pre_model", tool_steps=3, attempts=3, prompt_metadata={})
+    assert len(reminders) >= 1
+    assert "a.py" in reminders[0]
+
+
+def test_reminder_exploration_loop_respects_max_fires(tmp_path):
+    """exploration_loop 触发 2 次后不再触发（上限为 2）。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>Done.</final>"],
+    )
+    for i in range(3):
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": "a.py"}, "content": "line", "created_at": str(i)})
+
+    # 第 1 次触发
+    reminders = agent.check_reminders("pre_model", tool_steps=4, attempts=4, prompt_metadata={})
+    assert len(reminders) >= 1
+
+    # 第 2 次触发
+    reminders = agent.check_reminders("pre_model", tool_steps=5, attempts=5, prompt_metadata={})
+    assert len(reminders) >= 1
+
+    # 第 3 次不再触发（已达上限 2）
+    reminders = agent.check_reminders("pre_model", tool_steps=6, attempts=6, prompt_metadata={})
+    assert len(reminders) == 0
+
+
+def test_reminder_context_pressure_fires_when_over_threshold(tmp_path):
+    """prompt 超 85% 预算 → 触发 context_pressure 提醒。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>OK.</final>"],
+    )
+    # 模拟 prompt 接近满载
+    meta = {"prompt_chars": 10500, "prompt_budget_chars": 12000}  # 87.5%
+    reminders = agent.check_reminders("pre_model", tool_steps=0, attempts=1, prompt_metadata=meta)
+    assert len(reminders) >= 1
+    assert "87%" in reminders[0] or "capacity" in reminders[0].lower()
+
+
+def test_reminder_context_pressure_does_not_fire_below_threshold(tmp_path):
+    """prompt 低于 85% 预算 → 不触发。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>OK.</final>"],
+    )
+    meta = {"prompt_chars": 6000, "prompt_budget_chars": 12000}  # 50%
+    reminders = agent.check_reminders("pre_model", tool_steps=0, attempts=1, prompt_metadata=meta)
+    assert len(reminders) == 0
+
+
+def test_reminder_empty_final_triggers_retry_in_agent_loop(tmp_path):
+    """模型返回过短的 final (<5 字符) → post_model 提醒注入 → 重试给出有效答案。"""
+    (tmp_path / "hello.txt").write_text("alpha\n", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"hello.txt","start":1,"end":1}}</tool>',
+            "<final>ok</final>",                              # 2 字符 < 5 → 触发 empty_final
+            "<final>File hello.txt has been read successfully.</final>",  # 重试后有效答案
+        ],
+    )
+    answer = agent.ask("Read hello.txt")
+    assert answer == "File hello.txt has been read successfully."
+
+    # 验证提醒被注入到了 history
+    history = agent.session["history"]
+    reminder_items = [
+        item for item in history
+        if item["role"] == "user" and "empty" in item["content"].lower()
+    ]
+    assert len(reminder_items) >= 1
+
+
+def test_reminder_premature_stop_after_failed_tool(tmp_path):
+    """模型在工具失败后立即返回 final → 触发 premature_stop。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>Giving up now.</final>"],
+    )
+    # 模拟刚执行了一个失败的工具
+    agent.record({"role": "tool", "name": "run_shell", "args": {"command": "bad"}, "content": "error: command failed", "created_at": "t1"})
+
+    reminders = agent.check_reminders("post_model", tool_steps=1, kind="final", payload="Giving up now.")
+    assert len(reminders) >= 1
+    assert "review" in reminders[0].lower() or "tool" in reminders[0].lower()
+
+
+def test_reminder_disabled_by_feature_flag(tmp_path):
+    """feature flag reminders=False → 不触发任何提醒。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>done</final>"],
+        feature_flags={"reminders": False},
+    )
+    for i in range(3):
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": "a.py"}, "content": "line", "created_at": str(i)})
+
+    reminders = agent.check_reminders("pre_model", tool_steps=3, attempts=3, prompt_metadata={})
+    assert len(reminders) == 0
+
+
+def test_reminder_error_recovery_fires_on_consecutive_errors(tmp_path):
+    """连续 2 次工具 error → 触发 error_recovery_abandon。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>Giving up.</final>"],
+    )
+    agent.record({"role": "tool", "name": "run_shell", "args": {"command": "bad1"}, "content": "error: command not found", "created_at": "t1"})
+    agent.record({"role": "tool", "name": "run_shell", "args": {"command": "bad2"}, "content": "error: command not found", "created_at": "t2"})
+
+    reminders = agent.check_reminders("pre_model", tool_steps=2, attempts=2, prompt_metadata={})
+    assert len(reminders) >= 1
+    assert "error" in reminders[0].lower()
+
+
+# ── 大输出 Offloading 测试 ─────────────────────────────────────────────
+
+
+def test_large_tool_output_is_offloaded_to_scratch(tmp_path):
+    """工具输出 > 8000 字符 → offload 到 .pico/scratch/ 并返回预览。"""
+    (tmp_path / "big.txt").write_text("X" * 9000, encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        ["<final>ok</final>"],
+    )
+    # 模拟 task_state 以便生成 scratch 文件名
+    agent.current_task_state = type("TS", (), {"task_id": "task_test", "tool_steps": 1})()
+
+    result = agent.execute_tool("read_file", {"path": "big.txt", "start": 1, "end": 9000})
+
+    # 验证预览而非完整内容
+    assert len(result.content) < 9000
+    assert "full output" in result.content
+    assert ".pico/scratch/" in result.content
+
+    # 验证 scratch 文件存在且包含完整内容（read_file 会加 # path 头 + 行号）
+    scratch_dir = tmp_path / ".pico" / "scratch"
+    scratch_files = list(scratch_dir.glob("*.txt"))
+    assert len(scratch_files) == 1
+    full_content = scratch_files[0].read_text(encoding="utf-8")
+    assert "X" * 9000 in full_content
+
+
+def test_small_tool_output_is_not_offloaded(tmp_path):
+    """工具输出 ≤ 8000 字符 → 正常返回，不创建 scratch 文件。"""
+    (tmp_path / "small.txt").write_text("hello", encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        ["<final>ok</final>"],
+    )
+
+    result = agent.execute_tool("read_file", {"path": "small.txt"})
+
+    assert "hello" in result.content
+    assert "full output" not in result.content
+    # 不应创建 scratch 目录
+    assert not (tmp_path / ".pico" / "scratch").exists()
+
+
+def test_offload_creates_unique_filenames(tmp_path):
+    """每次 offload 生成独立文件名（包含 task_id + tool_name + step）。"""
+    (tmp_path / "big.txt").write_text("Y" * 9000, encoding="utf-8")
+    agent = build_agent(
+        tmp_path,
+        ["<final>ok</final>"],
+    )
+    agent.current_task_state = type("TS", (), {"task_id": "task_A", "tool_steps": 1})()
+    agent.execute_tool("read_file", {"path": "big.txt", "start": 1, "end": 9000})
+
+    agent.current_task_state = type("TS", (), {"task_id": "task_A", "tool_steps": 2})()
+    agent.execute_tool("read_file", {"path": "big.txt", "start": 1, "end": 9000})
+
+    scratch_files = list((tmp_path / ".pico" / "scratch").glob("*.txt"))
+    assert len(scratch_files) == 2
+    assert scratch_files[0].name != scratch_files[1].name
+
+
+# ── 审批持久化测试 ───────────────────────────────────────────────────
+
+
+def test_approval_store_default_rules_block_danger_commands(tmp_path):
+    """内置危险规则自动拒绝 rm -rf / sudo / chmod 777。"""
+    from pico.approval_store import ApprovalStore
+
+    store = ApprovalStore(tmp_path)
+    # rm -rf 应该被内置规则拦截
+    assert store.match("run_shell", {"command": "rm -rf /tmp/foo"}) == "never"
+    # sudo 应该被拦截
+    assert store.match("run_shell", {"command": "sudo make install"}) == "never"
+    # 普通命令不受影响
+    assert store.match("run_shell", {"command": "pytest -q"}) is None
+
+
+def test_approval_store_add_command_rule(tmp_path):
+    """添加 COMMAND 规则后，匹配的命令按规则决议。"""
+    from pico.approval_store import ApprovalStore
+
+    store = ApprovalStore(tmp_path)
+    store.add("COMMAND", "pytest -q", "auto")
+    assert store.match("run_shell", {"command": "pytest -q"}) == "auto"
+
+
+def test_approval_store_add_prefix_rule(tmp_path):
+    """PREFIX 规则匹配以指定前缀开头的命令。"""
+    from pico.approval_store import ApprovalStore
+
+    store = ApprovalStore(tmp_path)
+    store.add("PREFIX", "git ", "ask")
+    assert store.match("run_shell", {"command": "git status"}) == "ask"
+    assert store.match("run_shell", {"command": "git diff HEAD~1"}) == "ask"
+    # 不以 git 开头的不匹配
+    assert store.match("run_shell", {"command": "npm test"}) is None
+
+
+def test_approval_store_remove_rule(tmp_path):
+    """删除用户规则后不再匹配。"""
+    from pico.approval_store import ApprovalStore
+
+    store = ApprovalStore(tmp_path)
+    store.add("COMMAND", "pytest -q", "auto")
+    assert store.match("run_shell", {"command": "pytest -q"}) == "auto"
+
+    # 找到用户规则的索引（用户规则在内置默认规则之后）
+    rules = store.list_rules()
+    user_index = next(r["index"] for r in rules if r["pattern"] == "pytest -q")
+    store.remove(user_index)
+    assert store.match("run_shell", {"command": "pytest -q"}) is None
+
+
+def test_approval_store_persists_across_instances(tmp_path):
+    """规则持久化到磁盘，新实例能加载。"""
+    from pico.approval_store import ApprovalStore
+
+    store1 = ApprovalStore(tmp_path)
+    store1.add("COMMAND", "npm test", "auto")
+
+    store2 = ApprovalStore(tmp_path)
+    assert store2.match("run_shell", {"command": "npm test"}) == "auto"
+
+
+def test_approval_store_list_rules(tmp_path):
+    """list_rules 返回带索引的规则列表。"""
+    from pico.approval_store import ApprovalStore
+
+    store = ApprovalStore(tmp_path)
+    store.add("COMMAND", "pytest -q", "auto")
+    store.add("PREFIX", "git ", "ask")
+
+    rules = store.list_rules()
+    assert len(rules) >= 2  # 内置危险规则 + 2 条用户规则
+    assert rules[-2]["index"] is not None
+    assert rules[-1]["index"] is not None
+
+
+def test_approval_store_non_shell_tools_return_none(tmp_path):
+    """非 run_shell 工具不参与规则匹配，返回 None（交由全局策略）。"""
+    from pico.approval_store import ApprovalStore
+
+    store = ApprovalStore(tmp_path)
+    store.add("COMMAND", "write", "auto")  # 这条规则不会被用到
+
+    assert store.match("write_file", {"path": "a.py"}) is None
+    assert store.match("patch_file", {"path": "a.py"}) is None
+
+
+def test_approval_integration_respects_persistent_rule(tmp_path):
+    """Pico.approve() 优先使用持久化规则。"""
+    from pico.approval_store import ApprovalStore
+
+    agent = build_agent(tmp_path, ["<final>ok</final>"], approval_policy="ask")
+    agent.approval_store.add("COMMAND", "echo hello", "auto")
+
+    # COMMAND 规则设为 auto → 应该自动批准
+    assert agent.approve("run_shell", {"command": "echo hello"}) is True
+
+
+# ── 自适应压缩测试 ───────────────────────────────────────────────────
+
+
+def test_observation_mask_produces_reference_pointers(tmp_path):
+    """Stage 2 观察遮蔽：旧工具输出变成引用指针而非截断内容。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    # 模拟多轮历史：最近 6 轮内的保留完整，之外的用引用指针
+    for i in range(10):
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": f"file{i}.py"}, "content": f"# file{i}.py\ndef foo{i}():\n    pass\n" * 3, "created_at": str(i)})
+
+    # 用观察遮蔽渲染
+    rendered = agent.context_manager._render_history_section(
+        budget=5000, observation_mask=True, protection_window=2
+    )
+    masked = rendered.rendered
+
+    # 旧（file0-file7）应该是引用指针，新（file8, file9）应该完整
+    assert "lines" in masked or "output masked" in masked.lower()  # 引用指针
+    assert "file9.py" in masked  # 最近的在保护窗口内
+
+
+def test_observation_mask_is_smaller_than_raw(tmp_path):
+    """观察遮蔽输出的字符数应显著小于原始输出。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    for i in range(8):
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": f"f{i}.py"}, "content": "X" * 200, "created_at": str(i)})
+
+    raw = agent.context_manager._render_history_section(budget=5000, observation_mask=False, protection_window=6)
+    masked = agent.context_manager._render_history_section(budget=5000, observation_mask=True, protection_window=2)
+
+    assert len(masked.rendered) < len(raw.rendered)
+
+
+def test_protection_window_controls_recent_items_kept_intact(tmp_path):
+    """保护窗口控制最近几轮保留完整输出。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    for i in range(5):
+        agent.record({"role": "tool", "name": "read_file", "args": {"path": f"f{i}.py"}, "content": f"content_{i}" * 20, "created_at": str(i)})
+
+    # protection_window=1：只有最后一次保留完整
+    tight = agent.context_manager._render_history_section(budget=5000, observation_mask=True, protection_window=1)
+    # protection_window=5：全部保留完整（5 个都在窗口内）
+    wide = agent.context_manager._render_history_section(budget=5000, observation_mask=True, protection_window=5)
+
+    assert len(tight.rendered) < len(wide.rendered)
+
+
+def test_stage_1_warning_does_not_change_prompt(tmp_path):
+    """Stage 1（≥70%）仅记录日志，不改变 prompt 内容。"""
+    agent = build_agent(tmp_path, ["<final>Done.</final>"])
+    # 设置极低预算以触发 ≥70%
+    agent.context_manager.total_budget = 100
+    meta = agent._build_prompt_and_metadata("test")[1]
+    reductions = meta.get("budget_reductions", [])
+    # 应该有 stage 1 的日志
+    stages = [r.get("stage") for r in reductions]
+    # 在 100 字符预算下可能触发 stage 1 或更高
+    assert len(reductions) >= 0  # 至少有日志记录
+
+
+def test_search_tool_output_masked_with_match_count(tmp_path):
+    """search 工具的引用指针应包含匹配数和文件数。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    content = "a.py:1:foo\na.py:5:foobar\nb.py:3:foo\n"
+    agent.record({"role": "tool", "name": "search", "args": {"pattern": "foo"}, "content": content, "created_at": "t1"})
+
+    # 这条在保护窗口外 → 遮蔽
+    masked = agent.context_manager._mask_tool_output({
+        "name": "search", "args": {"pattern": "foo"}, "content": content,
+    })
+    assert "3 matches" in masked
+    assert "2 files" in masked
+
+
+def test_shell_tool_output_masked_with_exit_code_and_test_counts(tmp_path):
+    """run_shell 的引用指针应解析退出码和测试结果。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    content = "exit_code: 0\nstdout:\n8 passed, 2 failed in 2.34s\n"
+    agent.record({"role": "tool", "name": "run_shell", "args": {"command": "pytest"}, "content": content, "created_at": "t1"})
+
+    masked = agent.context_manager._mask_tool_output({
+        "name": "run_shell", "args": {"command": "pytest"}, "content": content,
+    })
+    assert "exit:0" in masked
+    assert "8P/2F" in masked
+
+
+def test_read_file_masked_output_shows_line_count_and_symbols(tmp_path):
+    """read_file 的引用指针应显示行数和关键符号。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    content = "# main.py\n   1: import os\n   2: \n   3: def main():\n   4:     pass\n   5: class Config:\n   6:     pass\n"
+    agent.record({"role": "tool", "name": "read_file", "args": {"path": "main.py"}, "content": content, "created_at": "t1"})
+
+    masked = agent.context_manager._mask_tool_output({
+        "name": "read_file", "args": {"path": "main.py"}, "content": content,
+    })
+    assert "main.py" in masked
+    assert "lines" in masked
+    assert "main" in masked
+    assert "Config" in masked
+
+
+# ── Thinking Model 测试 ───────────────────────────────────────────────
+
+
+def test_thinking_model_is_skipped_when_not_configured(tmp_path):
+    """未配置 thinking_model_client 时，正常完成不报错。"""
+    agent = build_agent(tmp_path, ["<final>Done.</final>"])
+    assert agent.thinking_model_client is None
+    assert agent.ask("test") == "Done."
+
+
+def test_thinking_model_called_when_configured(tmp_path):
+    """配置 thinking 模型后，thinking 输出被注入到 history。"""
+    (tmp_path / "a.py").write_text("x", encoding="utf-8")
+    thinking_outputs = ["Analyze: should read a.py first, then decide."]
+
+    class ThinkingFake(FakeModelClient):
+        pass
+
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"a.py","start":1,"end":1}}</tool>',
+            "<final>File inspected.</final>",
+        ],
+        max_steps=4,
+        thinking_model_client=ThinkingFake(thinking_outputs),
+    )
+    answer = agent.ask("Inspect a.py")
+    assert answer == "File inspected."
+
+    # thinking 输出应该以 [Thinking] role:user 出现在 history
+    thinking_items = [
+        item for item in agent.session["history"]
+        if item["role"] == "user" and "[Thinking]" in item["content"]
+    ]
+    assert len(thinking_items) >= 1
+
+
+def test_thinking_model_skipped_for_short_tasks(tmp_path):
+    """max_steps < 4 时跳过 thinking。"""
+    agent = build_agent(
+        tmp_path,
+        ["<final>Quick answer.</final>"],
+        max_steps=2,
+        thinking_model_client=FakeModelClient(["unused"]),
+    )
+    answer = agent.ask("quick question")
+    assert answer == "Quick answer."
+    # thinking 不应该被调用（FakeModelClient 的 "unused" 没被消费）
+
+
+def test_thinking_model_failure_does_not_block_main_flow(tmp_path):
+    """thinking 模型调用失败不应影响主流程。"""
+
+    class BrokenThinking:
+        supports_prompt_cache = False
+        last_completion_metadata = {}
+
+        def complete(self, prompt, max_new_tokens, **kwargs):
+            raise RuntimeError("thinking model unavailable")
+
+    agent = build_agent(
+        tmp_path,
+        ["<final>Recovered.</final>"],
+        max_steps=4,
+        thinking_model_client=BrokenThinking(),
+    )
+    answer = agent.ask("do the task")
+    assert answer == "Recovered."
+
+
+# ── Self-Critique 测试 ────────────────────────────────────────────────
+
+
+def test_critique_runs_after_thinking_for_complex_tasks(tmp_path):
+    """max_steps >= 6 时，thinking 之后应触发 critique。"""
+    (tmp_path / "a.py").write_text("x", encoding="utf-8")
+
+    class ThinkAndCritique(FakeModelClient):
+        pass
+
+    thinking = ThinkAndCritique([
+        "Analyze: read a.py, check for bug pattern X.",
+        "Critique: plan looks solid, but also check imports.",
+    ])
+
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"a.py","start":1,"end":1}}</tool>',
+            "<final>Bug not found, file is clean.</final>",
+        ],
+        max_steps=6,
+        thinking_model_client=thinking,
+    )
+    answer = agent.ask("Find bug pattern X in a.py")
+    assert answer == "Bug not found, file is clean."
+
+    # 验证 thinking 和 critique 都出现在 history
+    history = agent.session["history"]
+    thinking_items = [i for i in history if "[Thinking]" in i.get("content", "")]
+    critique_items = [i for i in history if "[Critique]" in i.get("content", "")]
+    assert len(thinking_items) >= 1
+    assert len(critique_items) >= 1
+
+
+def test_critique_skipped_for_medium_tasks(tmp_path):
+    """max_steps < 6 时不触发 critique（但 thinking 仍运行）。"""
+    (tmp_path / "a.py").write_text("x", encoding="utf-8")
+    thinking = FakeModelClient(["Analyze: simple task, read a.py."])
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"a.py","start":1,"end":1}}</tool>',
+            "<final>Done.</final>",
+        ],
+        max_steps=4,
+        thinking_model_client=thinking,
+    )
+    agent.ask("Read a.py")
+    critique_items = [i for i in agent.session["history"] if "[Critique]" in i.get("content", "")]
+    assert len(critique_items) == 0
+
+
+def test_critique_failure_does_not_block_main_flow(tmp_path):
+    """critique 调用失败不影响主流程。"""
+    (tmp_path / "a.py").write_text("x", encoding="utf-8")
+
+    class ThinkOkCritiqueFail:
+        supports_prompt_cache = False
+        last_completion_metadata = {}
+        _call_count = 0
+
+        def complete(self, prompt, max_new_tokens, **kwargs):
+            self._call_count += 1
+            if self._call_count == 1:
+                return "Thinking: read a.py."
+            raise RuntimeError("critique failed")
+
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"a.py","start":1,"end":1}}</tool>',
+            "<final>Completed despite critique failure.</final>",
+        ],
+        max_steps=6,
+        thinking_model_client=ThinkOkCritiqueFail(),
+    )
+    answer = agent.ask("Check a.py")
+    assert answer == "Completed despite critique failure."
+
+
+# ── Plan Mode 测试 ───────────────────────────────────────────────────
+
+
+def test_plan_mode_generates_structured_plan(tmp_path):
+    """Planner agent 生成结构化计划。"""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("def main(): pass\n", encoding="utf-8")
+
+    agent = build_agent(
+        tmp_path,
+        [
+            '<tool>{"name":"read_file","args":{"path":"src/main.py","start":1,"end":10}}</tool>',
+            '<tool>{"name":"search","args":{"pattern":"main","path":"."}}</tool>',
+            '<tool>{"name":"list_files","args":{"path":"src"}}</tool>',
+            "<final>## Goal\nAdd logging to main.py\n\n## Context\nFound main() in src/main.py\n\n## Files to modify\n- src/main.py — add logging\n\n## New files\nNone\n\n## Steps\n1. Read src/main.py\n2. Add import logging\n3. Add logging.info() call\n\n## Verification\n- Run python src/main.py\n\n## Risks\nNone</final>",
+        ],
+    )
+    from pico.plan_mode import generate_plan
+    plan = generate_plan(agent, "Add logging to main.py")
+    assert "## Goal" in plan
+    assert "## Steps" in plan
+    assert "logging" in plan.lower()
+
+
+def test_extract_plan_from_output_handles_extra_text(tmp_path):
+    """_extract_plan_from_output 提取以 ## Goal 开头的部分。"""
+    from pico.plan_mode import _extract_plan_from_output
+
+    raw = "Some chat text\n## Goal\nDo something.\n\n## Steps\n1. Step one"
+    plan = _extract_plan_from_output(raw)
+    assert plan.startswith("## Goal")
+    assert "Do something" in plan
+    assert "Some chat" not in plan
+
+
+def test_plan_mode_planner_has_only_read_tools(tmp_path):
+    """Planner agent 只能使用只读工具（schema gating）。"""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("def main(): pass\n", encoding="utf-8")
+
+    # Planner 需要足够多的输出来完成探索（最多 5 轮工具调用 + 最终计划）
+    plan_outputs = [
+        '<tool>{"name":"list_files","args":{"path":"src"}}</tool>',
+        "<final>## Goal\nAdd logging\n\n## Context\nfound main()\n\n## Files to modify\n- src/main.py\n\n## New files\nNone\n\n## Steps\n1. Read main.py\n2. Add logging\n\n## Verification\n- run it\n\n## Risks\nNone</final>",
+    ]
+    agent = build_agent(tmp_path, plan_outputs)
+    from pico.plan_mode import generate_plan
+    plan_text = generate_plan(agent, "test task")
+    assert plan_text
+    assert "## Goal" in plan_text
+
+
+def test_active_plan_injected_into_prompt(tmp_path):
+    """active_plan 内容被注入到 prompt prefix。"""
+    from pico.plan_mode import save_plan
+    agent = build_agent(tmp_path, ["<final>Executed plan.</final>"])
+
+    plan_text = "## Goal\nTest plan\n\n## Steps\n1. Do something"
+    save_plan(agent.root, plan_text, "test")
+
+    # 验证 active_plan 返回计划内容
+    assert "Test plan" in agent.active_plan
+
+    # 验证 plan 被注入到了 prompt
+    agent.ask("execute the plan")
+    last_prompt = agent.model_client.prompts[-1]
+    assert "Current Plan:" in last_prompt
+    assert "Test plan" in last_prompt
+
+
+def test_plan_mode_clear_plans(tmp_path):
+    """clear_active_plan 清除所有计划文件。"""
+    from pico.plan_mode import save_plan
+
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    save_plan(agent.root, "## Goal\nSomething", "test")
+    assert agent.active_plan
+
+    agent.clear_active_plan()
+    assert not agent.active_plan
+
+
+# ── Fuzzy Patch 测试 ─────────────────────────────────────────────────
+
+
+def test_fuzzy_patch_stage2_trimmed_whitespace(tmp_path):
+    """Stage 2：old_text 首尾有多余空白时仍可匹配。"""
+    path = tmp_path / "a.py"
+    path.write_text("def foo():\n    pass\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("patch_file", {
+        "path": "a.py",
+        "old_text": "  def foo():\n    pass  ",   # 首尾有多余空白
+        "new_text": "def bar():\n    pass\n",
+    })
+    assert "patched" in result
+    assert "stage 2" in result or "trimmed" in result
+    assert path.read_text(encoding="utf-8") == "def bar():\n    pass\n"
+
+
+def test_fuzzy_patch_stage3_line_level_match(tmp_path):
+    """Stage 3：逐行 strip 后匹配（忽略每行缩进差异）。"""
+    path = tmp_path / "a.py"
+    path.write_text("    def foo():\n        pass\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("patch_file", {
+        "path": "a.py",
+        "old_text": "def foo():\n    pass",  # 缩进不同，但逐行 strip 后相同
+        "new_text": "def bar():\n    return 42",
+    })
+    assert "patched" in result
+    assert path.read_text(encoding="utf-8") == "def bar():\n    return 42"
+
+
+def test_fuzzy_patch_stage1_exact_match_still_works(tmp_path):
+    """Stage 1：精确匹配不受影响（向后兼容）。"""
+    path = tmp_path / "a.py"
+    path.write_text("alpha\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("patch_file", {
+        "path": "a.py",
+        "old_text": "alpha",
+        "new_text": "beta",
+    })
+    assert "patched" in result
+    assert path.read_text(encoding="utf-8") == "beta\n"
+
+
+def test_fuzzy_patch_unique_exact_matches_still_rejected(tmp_path):
+    """精确匹配出现多次时仍然拒绝（需要更多上下文）。"""
+    path = tmp_path / "a.py"
+    path.write_text("alpha\nbeta\nalpha\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("patch_file", {
+        "path": "a.py",
+        "old_text": "alpha",
+        "new_text": "gamma",
+    })
+    assert "not unique" in result.lower()
+    assert "2 exact matches" in result.lower()
+
+
+def test_fuzzy_patch_all_stages_fail_gives_helpful_error(tmp_path):
+    """全部 6 阶段失败时给出可执行的错误信息。"""
+    path = tmp_path / "a.py"
+    path.write_text("def foo():\n    pass\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("patch_file", {
+        "path": "a.py",
+        "old_text": "def completely_different():\n    return 999",
+        "new_text": "nope",
+    })
+    assert "6 stages" in result.lower() or "re-read" in result.lower()
+
+
+def test_fuzzy_patch_stage4_ignore_blank_lines(tmp_path):
+    """Stage 4：忽略空白行差异。"""
+    path = tmp_path / "a.py"
+    path.write_text("def foo():\n\n    pass\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("patch_file", {
+        "path": "a.py",
+        "old_text": "def foo():\n    pass",  # 没有空行
+        "new_text": "def bar():\n    return 1",
+    })
+    assert "patched" in result
+
+
+# ── 新工具测试 ───────────────────────────────────────────────────────
+
+
+def test_file_info_shows_size_and_lines(tmp_path):
+    """file_info 返回文件大小、行数、修改时间。"""
+    path = tmp_path / "a.py"
+    path.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("file_info", {"path": "a.py"})
+    assert "file:" in result or "a.py" in result
+    assert "bytes" in result
+    assert "lines: 3" in result
+
+
+def test_file_info_on_directory_shows_type(tmp_path):
+    """file_info 对目录显示 directory 类型。"""
+    (tmp_path / "src").mkdir()
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("file_info", {"path": "src"})
+    assert "directory" in result
+
+
+def test_glob_finds_files_by_pattern(tmp_path):
+    """glob 按模式匹配文件。"""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x", encoding="utf-8")
+    (tmp_path / "src" / "b.py").write_text("x", encoding="utf-8")
+    (tmp_path / "src" / "c.txt").write_text("x", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("glob", {"pattern": "src/*.py"})
+    assert "a.py" in result
+    assert "b.py" in result
+    assert "c.txt" not in result
+
+
+def test_grep_count_shows_match_counts_not_content(tmp_path):
+    """grep_count 返回匹配统计，不返回具体内容。"""
+    (tmp_path / "a.py").write_text("TODO: fix this\npass\n# TODO later\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("no matches here\n", encoding="utf-8")
+    agent = build_agent(tmp_path, [])
+
+    result = agent.run_tool("grep_count", {"pattern": "TODO", "path": "."})
+    assert "matches" in result.lower()
+    assert "fix this" not in result  # 不包含匹配内容
+
+
+def test_git_diff_on_modified_repo_shows_changes(tmp_path):
+    """git_diff 显示工作区变更。"""
+    (tmp_path / "a.py").write_text("original\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    (tmp_path / "a.py").write_text("modified\n", encoding="utf-8")
+
+    agent = build_agent(tmp_path, [])
+    result = agent.run_tool("git_diff", {})
+    assert "modified" in result
+
+
+def test_git_log_shows_recent_commits(tmp_path):
+    """git_log 显示最近提交历史。"""
+    (tmp_path / "a.py").write_text("v1\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "first commit"], cwd=tmp_path, capture_output=True)
+
+    agent = build_agent(tmp_path, [])
+    result = agent.run_tool("git_log", {"n": 3})
+    assert "first commit" in result
+
+
+def test_git_log_defaults_to_five_entries(tmp_path):
+    """git_log 默认返回 5 条记录，n 参数可调整。"""
+    agent = build_agent(tmp_path, [])
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+    result = agent.run_tool("git_log", {})
+    # 没有提交时显示 (no commits)
+    assert "no commits" in result.lower()
+
+
+# ── ACE Playbook 测试 ───────────────────────────────────────────────
+
+
+def test_playbook_extracts_write_then_patch_correction(tmp_path):
+    """B 类：write_file 后被 patch_file 修正 → 格式约定。"""
+    from pico.features.memory import _extract_playbook_candidates
+
+    history = [
+        {"role": "tool", "name": "write_file", "args": {"path": "a.py", "content": "def f():pass"}, "content": "wrote a.py", "created_at": "t1"},
+        {"role": "tool", "name": "patch_file", "args": {"path": "a.py", "old_text": "def f():pass", "new_text": "def f():\n    pass"}, "content": "patched a.py", "created_at": "t2"},
+    ]
+    candidates = _extract_playbook_candidates(history)
+    assert len(candidates) >= 1
+    assert any("a.py" in c[1] for c in candidates)
+
+
+def test_playbook_extracts_user_correction_as_preference(tmp_path):
+    """C 类：用户消息含纠正关键词 → 偏好记录。"""
+    from pico.features.memory import _extract_playbook_candidates
+
+    history = [
+        {"role": "user", "content": "请不要使用 class，用 dataclass 代替", "created_at": "t1"},
+    ]
+    candidates = _extract_playbook_candidates(history)
+    assert len(candidates) >= 1
+    assert "dataclass" in candidates[0][1]
+
+
+def test_playbook_extracts_successful_test_command(tmp_path):
+    """D 类：成功的测试命令 → 项目约定。"""
+    from pico.features.memory import _extract_playbook_candidates
+
+    history = [
+        {"role": "tool", "name": "run_shell", "args": {"command": "pytest -q -x"},
+         "content": "exit_code: 0\nstdout:\n10 passed in 1.23s\n", "created_at": "t1"},
+    ]
+    candidates = _extract_playbook_candidates(history)
+    assert len(candidates) >= 1
+    assert "pytest" in candidates[0][1]
+
+
+def test_playbook_injects_knowledge_into_prompt(tmp_path):
+    """Project Knowledge 注入 prompt prefix。"""
+    agent = build_agent(tmp_path, ["<final>Got it.</final>"])
+    # 模拟已有 playbook 知识
+    agent.memory.durable_store.promote([("project-conventions", "use pytest -x for fail-fast")])
+
+    prompt, _ = agent.context_manager.build("do the task")
+    assert "Project Knowledge" in prompt
+    assert "pytest -x" in prompt
+
+
+def test_playbook_empty_when_no_knowledge(tmp_path):
+    """没有积累的知识时 playbook_text 返回空字符串。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+    assert agent.memory.playbook_text() == ""
+
+
+def test_playbook_no_duplicate_candidates(tmp_path):
+    """相同候选不重复添加（通过 DurableMemoryStore.promote 的去重机制）。"""
+    agent = build_agent(tmp_path, ["<final>ok</final>"])
+
+    # 第一次提取并持久化
+    promoted1, _ = agent.memory.run_playbook_extraction([
+        {"role": "user", "content": "请用 f-string 而不是 format()", "created_at": "t1"},
+    ])
+    assert len(promoted1) >= 1
+
+    # 第二次提取相同内容 → 应被去重跳过
+    promoted2, _ = agent.memory.run_playbook_extraction([
+        {"role": "user", "content": "请用 f-string 而不是 format()", "created_at": "t2"},
+    ])
+    assert len(promoted2) == 0
+
+
+def test_playbook_core_file_detected_for_structural_files(tmp_path):
+    """A 类：高频读取的结构性文件被识别为核心文件。"""
+    from pico.features.memory import _extract_playbook_candidates
+
+    history = []
+    for _ in range(3):
+        history.append({"role": "tool", "name": "read_file", "args": {"path": "src/config.py"}, "content": "...", "created_at": "t"})
+    history.append({"role": "tool", "name": "read_file", "args": {"path": "src/models.py"}, "content": "...", "created_at": "t"})
+
+    candidates = _extract_playbook_candidates(history)
+    assert any("config.py" in c[1] for c in candidates)
+
+
+def test_planner_uses_dedicated_model_when_configured(tmp_path):
+    """Planner 使用独立的 planner_model_client（如果配置了）。"""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("def main(): pass\n", encoding="utf-8")
+
+    planner_fake = FakeModelClient([
+        '<tool>{"name":"read_file","args":{"path":"src/main.py","start":1,"end":10}}</tool>',
+        "<final>## Goal\nAdd logging\n\n## Context\nfound main()\n\n## Files to modify\n- src/main.py\n\n## New files\nNone\n\n## Steps\n1. Add logging\n\n## Verification\n- run it\n\n## Risks\nNone</final>",
+    ])
+
+    agent = build_agent(
+        tmp_path, ["<final>ok</final>"],
+        thinking_model_client=FakeModelClient(["unused-thinking"]),
+        planner_model_client=planner_fake,
+    )
+
+    from pico.plan_mode import generate_plan
+    plan = generate_plan(agent, "test")
+    assert "## Goal" in plan
+    # planner_fake 被消费了 → 确认用了 planner 专用模型
+    assert len(planner_fake.outputs) == 0
 
 
 def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):

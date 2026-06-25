@@ -43,11 +43,31 @@ WELCOME_STATUS = "calm shell, ready for work"
 HELP_DETAILS = textwrap.dedent(
     """\
     Commands:
-    /help    Show this help message.
-    /memory  Show the agent's distilled working memory.
-    /session Show the path to the saved session file.
-    /reset   Clear the current session history and memory.
-    /exit    Exit the agent.
+    /help      Show this help message.
+    /plan      Explore codebase and create a structured plan for review.
+    /memory    Show the agent's distilled working memory.
+    /session   Show the path to the saved session file.
+    /approve   Manage persistent approval rules (add/list/remove).
+    /reset     Clear the current session history and memory.
+    /exit      Exit the agent.
+    """
+).strip()
+
+APPROVE_HELP = textwrap.dedent(
+    """\
+    /approve add <type> <pattern> <decision>
+      type: PATTERN (regex), COMMAND (exact), PREFIX (starts with), DANGER (blacklist)
+      decision: auto (always approve), ask (always ask), never (always deny)
+      Examples:
+        /approve add COMMAND "pytest -q" auto
+        /approve add PREFIX "git " ask
+        /approve add PATTERN "^npm (test|run)" auto
+
+    /approve list
+      Show all persistent rules with their indices.
+
+    /approve remove <index>
+      Remove the rule at the given index (from /approve list).
     """
 ).strip()
 
@@ -105,6 +125,126 @@ def _effective_model(args, provider):
     return DEFAULT_OLLAMA_MODEL
 
 
+def _handle_plan(agent, user_input):
+    """处理 /plan 命令：生成计划 → 交互确认 → 执行。"""
+    from .plan_mode import generate_plan, save_plan, latest_plan_text, clear_plans
+
+    parts = user_input.strip().split(maxsplit=1)
+    task = parts[1].strip() if len(parts) > 1 else ""
+
+    if not task and user_input.strip() == "/plan":
+        # /plan 无参数：显示当前活跃计划
+        plan = latest_plan_text(agent.root)
+        if plan:
+            print("Active plan:\n")
+            print(plan)
+        else:
+            print("No active plan. Use /plan <task> to create one.")
+        return
+
+    if task.lower() == "clear":
+        clear_plans(agent.root)
+        print("All plans cleared.")
+        return
+
+    print("\n  Planning...\n")
+    try:
+        plan_text = generate_plan(agent, task)
+    except Exception as exc:
+        print(f"Planning failed: {exc}")
+        return
+
+    # 保存计划
+    save_plan(agent.root, plan_text, task)
+
+    # 显示计划
+    plan_text = latest_plan_text(agent.root) or plan_text
+    border = "─" * 60
+    print(border)
+    for line in plan_text.splitlines():
+        print(f"  {line}")
+    print(border)
+
+    # 交互确认
+    try:
+        answer = input("\nExecute this plan? [Y/n/e(dit)] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\nPlan saved. Type your next request to execute.")
+        return
+
+    if answer in ("n", "no"):
+        print("Plan saved. Edit the file or type your next request to execute.")
+        return
+
+    if answer in ("e", "edit"):
+        plans_dir = agent.root / ".pico" / "plans"
+        latest = sorted(plans_dir.glob("plan_*.md"), reverse=True)
+        if latest:
+            path = str(latest[0])
+            print(f"Plan file: {path}")
+            print("Edit the file, then type your next request to execute.")
+        return
+
+    # answer 为空或 y/yes：立即执行
+    print()
+
+
+def _handle_approve(agent, user_input):
+    """处理 /approve 命令：add / list / remove。"""
+    import shlex
+
+    parts = user_input.strip().split(maxsplit=2)
+    sub = parts[1] if len(parts) > 1 else ""
+
+    if sub == "list":
+        rules = agent.approval_store.list_rules()
+        if not rules:
+            print("(no persistent rules)")
+            return
+        for rule in rules:
+            print(f"  [{rule['index']}] {rule['type']:8} {rule['pattern']:30} → {rule['decision']}")
+        return
+
+    if sub == "remove":
+        if len(parts) < 3:
+            print("usage: /approve remove <index>")
+            return
+        try:
+            index = int(parts[2])
+            removed = agent.approval_store.remove(index)
+            print(f"removed rule [{index}]: {removed['type']} {removed['pattern']}")
+        except (ValueError, IndexError) as exc:
+            print(f"error: {exc}")
+        return
+
+    if sub == "add":
+        if len(parts) < 3:
+            print("usage: /approve add <type> <pattern> <decision>")
+            return
+        try:
+            add_parts = shlex.split(parts[2])
+        except ValueError:
+            add_parts = parts[2].split()
+        if len(add_parts) < 3:
+            print("usage: /approve add <type> <pattern> <decision>")
+            return
+        rule_type = add_parts[0].upper()
+        pattern = add_parts[1]
+        decision = add_parts[2].lower()
+        try:
+            agent.approval_store.add(rule_type, pattern, decision)
+            print(f"added rule: {rule_type} {pattern} → {decision}")
+        except ValueError as exc:
+            print(f"error: {exc}")
+        return
+
+    if sub == "help" or not sub:
+        print(APPROVE_HELP)
+        return
+
+    print(f"unknown sub-command: /approve {sub}. Use /approve help for usage.")
+
+
 def _configured_secret_names(args):
     configured_secret_names = set(DEFAULT_SECRET_ENV_NAMES)
     configured_secret_names.update(str(name).upper() for name in args.secret_env_names)
@@ -116,6 +256,105 @@ def _configured_secret_names(args):
             if item.strip()
         )
     return sorted(configured_secret_names)
+
+
+def _build_optional_client(args, action_client, model_env, api_key_env, base_url_env="",
+                            provider_env_name=""):
+    """构建可选的角色模型客户端（thinking / critique / planner）。
+
+    - model_env: 模型环境变量名（如 PICO_THINKING_MODEL）
+    - api_key_env: API key 环境变量名（如 PICO_THINKING_API_KEY）
+    - base_url_env: API base URL 环境变量名（可选）
+    - provider_env_name: 独立的 provider 环境变量名（如 PICO_THINKING_PROVIDER），不配则用全局 provider
+    未配置 model_env 时返回 None。
+    """
+    model = provider_env(model_env)
+    if not model:
+        return None
+
+    # 该角色可独立指定 provider（跨 API 的关键）
+    provider = provider_env(provider_env_name) if provider_env_name else ""
+    if not provider:
+        provider = _effective_provider(args)
+
+    if provider == "ollama":
+        host = getattr(args, "host", DEFAULT_OLLAMA_HOST)
+        return OllamaModelClient(
+            model=model, host=host,
+            temperature=args.temperature, top_p=args.top_p,
+            timeout=args.ollama_timeout,
+        )
+
+    # 非 Ollama 走 OpenAI/Anthropic 兼容接口
+    api_key = provider_env(
+        api_key_env,
+        ("PICO_OPENAI_API_KEY", "OPENAI_API_KEY", "PICO_RIGHT_CODES_API_KEY", "RIGHT_CODES_API_KEY",
+         "PICO_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "PICO_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"),
+    )
+    base_url = provider_env(base_url_env) if base_url_env else ""
+
+    # 根据 provider 选择客户端类型
+    if provider in ("anthropic", "deepseek"):
+        # DeepSeek 和 Anthropic 都走 Anthropic-compatible Messages API
+        if not base_url and provider == "deepseek":
+            base_url = DEFAULT_DEEPSEEK_BASE_URL
+        elif not base_url:
+            base_url = DEFAULT_ANTHROPIC_BASE_URL
+        return AnthropicCompatibleModelClient(
+            model=model, base_url=base_url, api_key=api_key,
+            temperature=args.temperature,
+            timeout=getattr(args, "openai_timeout", getattr(args, "ollama_timeout", 300)),
+        )
+    else:
+        # openai / ollama 统一用 OpenAICompatible
+        if not base_url and provider == "openai":
+            base_url = DEFAULT_OPENAI_BASE_URL
+        elif not base_url:
+            base_url = getattr(action_client, "base_url", DEFAULT_DEEPSEEK_BASE_URL)
+        return OpenAICompatibleModelClient(
+            model=model, base_url=base_url, api_key=api_key,
+            temperature=args.temperature,
+            timeout=getattr(args, "openai_timeout", getattr(args, "ollama_timeout", 300)),
+        )
+
+
+def _build_thinking_client(args, action_client):
+    """构建 thinking 模型客户端。未配置时返回 None。"""
+    return _build_optional_client(
+        args, action_client,
+        model_env="PICO_THINKING_MODEL",
+        api_key_env="PICO_THINKING_API_KEY",
+        base_url_env="PICO_THINKING_API_BASE",
+        provider_env_name="PICO_THINKING_PROVIDER",
+    )
+
+
+def _build_critique_client(args, action_client):
+    """构建 critique 模型客户端。未配置时回退到 thinking 模型。"""
+    client = _build_optional_client(
+        args, action_client,
+        model_env="PICO_CRITIQUE_MODEL",
+        api_key_env="PICO_CRITIQUE_API_KEY",
+        base_url_env="PICO_CRITIQUE_API_BASE",
+        provider_env_name="PICO_CRITIQUE_PROVIDER",
+    )
+    if client is None:
+        client = _build_thinking_client(args, action_client)
+    return client
+
+
+def _build_planner_client(args, action_client):
+    """构建 planner 模型客户端。未配置时回退到 thinking 模型。"""
+    client = _build_optional_client(
+        args, action_client,
+        model_env="PICO_PLANNER_MODEL",
+        api_key_env="PICO_PLANNER_API_KEY",
+        base_url_env="PICO_PLANNER_API_BASE",
+        provider_env_name="PICO_PLANNER_PROVIDER",
+    )
+    if client is None:
+        client = _build_thinking_client(args, action_client)
+    return client
 
 
 def _build_model_client(args):
@@ -241,6 +480,9 @@ def build_agent(args):
     configured_secret_names = _configured_secret_names(args)
     store = SessionStore(workspace.repo_root + "/.pico/sessions")
     model = _build_model_client(args)
+    thinking_model = _build_thinking_client(args, model)
+    critique_model = _build_critique_client(args, model)
+    planner_model = _build_planner_client(args, model)
     session_id = args.resume
     if session_id == "latest":
         session_id = store.latest()
@@ -254,6 +496,9 @@ def build_agent(args):
             max_steps=args.max_steps,
             max_new_tokens=args.max_new_tokens,
             secret_env_names=configured_secret_names,
+            thinking_model_client=thinking_model,
+            critique_model_client=critique_model,
+            planner_model_client=planner_model,
         )
     return Pico(
         model_client=model,
@@ -263,6 +508,9 @@ def build_agent(args):
         max_steps=args.max_steps,
         max_new_tokens=args.max_new_tokens,
         secret_env_names=configured_secret_names,
+        thinking_model_client=thinking_model,
+        critique_model_client=critique_model,
+        planner_model_client=planner_model,
     )
 
 
@@ -283,6 +531,11 @@ def build_arg_parser():
         "--model",
         default=None,
         help="Model name override. Defaults to qwen3.5:4b for Ollama, PICO_OPENAI_MODEL for openai, PICO_ANTHROPIC_MODEL for anthropic, and PICO_DEEPSEEK_MODEL for deepseek when set.",
+    )
+    parser.add_argument(
+        "--thinking-model",
+        default=None,
+        help="Separate model for pure reasoning (no tools). Falls back to PICO_THINKING_MODEL env var. If unset, thinking is disabled.",
     )
     parser.add_argument("--host", default=DEFAULT_OLLAMA_HOST, help="Ollama server URL.")
     parser.add_argument("--base-url", default=None, help="Provider API base URL for deepseek, openai, or anthropic.")
@@ -349,6 +602,12 @@ def main(argv=None):
         if user_input == "/reset":
             agent.reset()
             print("session reset")
+            continue
+        if user_input.startswith("/plan"):
+            _handle_plan(agent, user_input)
+            continue
+        if user_input.startswith("/approve"):
+            _handle_approve(agent, user_input)
             continue
 
         print()

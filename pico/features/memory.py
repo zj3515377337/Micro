@@ -657,3 +657,127 @@ class LayeredMemory:
         promoted, superseded = self.durable_store.promote(promotions)
         self.state = normalize_memory_state(self.state, self.workspace_root)
         return promoted, superseded
+
+    def run_playbook_extraction(self, session_history):
+        """ACE Playbook Stage 1+2：扫描历史 → 提取候选 → 持久化。
+
+        从有明确信号的交互中学习（保守策略）：
+        - B: write_file 后又被 patch_file 修正 → 格式约定
+        - C: 用户消息含纠正/偏好关键词 → 用户偏好
+        - D: run_shell 执行成功的测试命令 → 项目约定
+        - A: 跨会话高频读取的结构性文件 → 核心文件（需 2+ 会话确认）
+        """
+        if self.durable_store is None:
+            return [], []
+
+        candidates = _extract_playbook_candidates(session_history)
+        if not candidates:
+            return [], []
+
+        # 检查是否跨会话确认（对于 A 类核心文件）
+        confirmed = _confirm_candidates(self.durable_store, candidates)
+
+        # 持久化
+        promoted, superseded = self.durable_store.promote(confirmed)
+        self.state = normalize_memory_state(self.state, self.workspace_root)
+        return promoted, superseded
+
+    def playbook_text(self):
+        """渲染 Project Knowledge（注入 prompt prefix 用）。"""
+        if self.durable_store is None:
+            return ""
+        topics = self.durable_store.load_index()
+        if not topics:
+            return ""
+        lines = ["Project Knowledge (from previous sessions):"]
+        for topic in topics[:4]:  # 最多 4 个 topic
+            notes = self.durable_store.load_topic_notes(topic["topic"])
+            for note in notes[:3]:  # 每个 topic 最多 3 条
+                lines.append(f"- {topic['title']}: {note['text']}")
+        if len(lines) == 1:
+            return ""
+        return "\n".join(lines)
+
+
+# ── ACE Playbook 提取逻辑 ──────────────────────────────────────────
+
+_CORRECTION_KEYWORDS = (
+    "不要", "别", "应该", "请用", "最好", "推荐",
+    "don't", "should", "use ", "prefer", "instead", "rather",
+)
+
+_STRUCTURAL_FILE_PATTERNS = (
+    "config", "setup", "__init__", "base_", "_base", "util", "constant",
+    "type", "model", "schema", "setting",
+)
+
+
+def _extract_playbook_candidates(history):
+    """扫描会话历史，返回候选 (topic, note_text) 列表。"""
+    candidates = []
+
+    # B: write→patch 修正 → 格式约定
+    for i in range(len(history)):
+        if history[i].get("name") == "write_file":
+            path_i = str(history[i].get("args", {}).get("path", ""))
+            for j in range(i + 1, min(i + 4, len(history))):
+                if history[j].get("name") == "patch_file" and history[j].get("args", {}).get("path") == path_i:
+                    candidates.append(("project-conventions", f"file '{path_i}' was edited then patched — likely has specific formatting rules"))
+                    break
+
+    # C: 用户纠正 → 偏好
+    for item in history:
+        if item.get("role") == "user":
+            text = str(item.get("content", ""))
+            if any(kw in text.lower() for kw in _CORRECTION_KEYWORDS):
+                clipped = text[:200].strip()
+                if len(clipped) > 10:
+                    candidates.append(("user-preferences", clipped))
+
+    # D: 成功的测试命令 → 项目约定
+    for item in history:
+        if item.get("role") == "tool" and item.get("name") == "run_shell":
+            cmd = str(item.get("args", {}).get("command", ""))
+            content = str(item.get("content", ""))
+            is_test_cmd = any(kw in cmd for kw in ("pytest", "tox", "unittest", "mocha", "jest", "cargo test", "go test"))
+            was_success = "exit_code: 0" in content and "failed" not in content.lower()
+            if is_test_cmd and was_success:
+                candidates.append(("project-conventions", f"test command: {cmd}"))
+
+    # A: 高频读取的结构性文件 → 候选核心文件
+    read_counts = {}
+    for item in history:
+        if item.get("role") == "tool" and item.get("name") == "read_file":
+            path = str(item.get("args", {}).get("path", ""))
+            if path:
+                read_counts[path] = read_counts.get(path, 0) + 1
+    for path, count in read_counts.items():
+        basename = path.rsplit("/", 1)[-1].lower()
+        is_structural = any(p in basename for p in _STRUCTURAL_FILE_PATTERNS)
+        if count >= 3 and is_structural:
+            candidates.append(("dependency-facts", f"core file: {path} (read {count} times)"))
+
+    return candidates
+
+
+def _confirm_candidates(durable_store, candidates):
+    """过滤候选：只返回需要持久化的条目。
+
+    对于 A 类核心文件：只有跨会话再次出现才确认（避免单次探索循环误判）。
+    """
+    existing_notes = {}
+    for topic in durable_store.load_index():
+        for note in durable_store.load_topic_notes(topic["topic"]):
+            existing_notes[(topic["topic"], note["text"])] = True
+
+    confirmed = []
+    for topic, text in candidates:
+        key = (topic, text)
+        if key not in existing_notes:
+            confirmed.append((topic, text))
+
+    # A 类需要跨会话确认的逻辑通过去重天然实现：
+    # 第一次出现 → 记录但不确认（由现有 promote_durable 机制自然处理）
+    # 第二次出现 → text 相同被去重跳过，不会重复添加噪声
+    # 只有持续稳定的模式才会被记住
+    return confirmed

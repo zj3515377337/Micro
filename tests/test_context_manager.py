@@ -65,7 +65,9 @@ def test_context_manager_reduces_relevant_memory_before_history_and_preserves_ne
     for section in ("prefix", "memory", "relevant_memory", "history"):
         assert metadata["sections"][section]["rendered_chars"] <= metadata["sections"][section]["budget_chars"]
 
-    reduction_sections = [entry["section"] for entry in metadata["budget_reductions"]]
+    # 过滤出实际的预算缩减条目（排除 stage 标记）
+    budget_cuts = [entry for entry in metadata["budget_reductions"] if "before_chars" in entry]
+    reduction_sections = [entry["section"] for entry in budget_cuts]
     assert reduction_sections[0] == "relevant_memory"
     assert reduction_sections
     assert "RECENT-CONTEXT" in prompt

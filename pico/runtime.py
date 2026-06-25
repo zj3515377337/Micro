@@ -12,8 +12,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from . import approval_store as approvallib
 from . import checkpoint as checkpointlib
+from . import doom_loop as doomloop
 from .features import memory as memorylib
+from . import plan_mode as planlib
+from . import reminders as reminderslib
 from . import security as securitylib
 from .context_manager import ContextManager
 from .checkpoint import CHECKPOINT_NONE_STATUS
@@ -26,12 +30,21 @@ from .tool_executor import ToolExecutor
 from . import tools as toolkit
 from .workspace import IGNORED_PATH_NAMES, MAX_HISTORY, WorkspaceContext, clip, now
 
-DEFAULT_SHELL_ENV_ALLOWLIST = ("HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "PWD", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "USER")
+DEFAULT_SHELL_ENV_ALLOWLIST = (
+    "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "PWD",
+    "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "USER",
+    # conda/venv 激活变量——子进程 Python 依赖它们找到 DLL
+    "CONDA_PREFIX", "CONDA_DEFAULT_ENV", "CONDA_SHLVL",
+    "CONDA_PROMPT_MODIFIER", "VIRTUAL_ENV",
+    # Windows 必须的系统路径
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
+)
 DEFAULT_FEATURE_FLAGS = {
     "memory": True,
     "relevant_memory": True,
     "context_reduction": True,
     "prompt_cache": True,
+    "reminders": True,
 }
 DURABLE_MEMORY_INTENT_PATTERN = re.compile(r"(?i)\b(capture|remember|save|store|persist|note)\b")
 DURABLE_MEMORY_INTENT_ZH_PATTERN = re.compile(r"(记住|保存|记录|沉淀|长期记忆|持久记忆)")
@@ -68,8 +81,14 @@ class Pico:
         secret_env_names=None,
         feature_flags=None,
         allowed_tools=None,
+        thinking_model_client=None,
+        critique_model_client=None,
+        planner_model_client=None,
     ):
         self.model_client = model_client
+        self.thinking_model_client = thinking_model_client  # None = 禁用 thinking
+        self.critique_model_client = critique_model_client  # None = 回退到 thinking
+        self.planner_model_client = planner_model_client    # None = 回退到 thinking
         self.workspace = workspace
         self.root = Path(workspace.repo_root)
         self.session_store = session_store
@@ -502,7 +521,20 @@ class Pico:
     def ask(self, user_message):
         from .agent_loop import AgentLoop
 
-        return AgentLoop(self).run(user_message)
+        result = AgentLoop(self).run(user_message)
+
+        # ACE Playbook：会话结束后自动提取可复用知识
+        if self.feature_enabled("memory"):
+            try:
+                promoted, _ = self.memory.run_playbook_extraction(self.session.get("history", []))
+                if promoted:
+                    self.last_durable_promotions.extend(
+                        p for p in promoted if p not in self.last_durable_promotions
+                    )
+            except Exception:
+                pass  # 提取失败不影响主流程
+
+        return result
 
     def execute_tool(self, name, args):
         result = self.tool_executor.execute(name, args)
@@ -531,13 +563,47 @@ class Pico:
         return self.execute_tool(name, args).content
 
     def repeated_tool_call(self, name, args):
-        # agent 很常见的一种坏循环，是在没有新信息的情况下反复发起同一调用。
-        # 这里提前挡掉最简单的这种循环。
-        tool_events = [item for item in self.session["history"] if item["role"] == "tool"]
-        if len(tool_events) < 2:
-            return False
-        recent = tool_events[-2:]
-        return all(item["name"] == name and item["args"] == args for item in recent)
+        """检测是否陷入了重复调用循环（向后兼容接口）。
+
+        内部委托给 doom_loop 模块做三层检测。
+        返回 True 表示应该阻断本次调用。
+        """
+        blocked, _ = self.check_doom_loop(name, args)
+        return blocked
+
+    def check_doom_loop(self, name, args):
+        """检测死循环模式，返回 (blocked: bool, message: str)。
+
+        三层检测（从快到慢、从窄到宽）：
+        1. 最近 2 次完全相同 → 即时拦截
+        2. MD5 指纹在最近 20 次中出现 ≥3 次 → 拦截（捕获多拍循环）
+        3. 同一文件被 read_file ≥4 次 → 拦截（捕获探索循环）
+
+        blocked=True 时，message 是给模型的反馈文本，
+        应由 ToolExecutor 作为工具执行结果返回。
+        """
+        return doomloop.check_doom_loop(self, name, args)
+
+    @property
+    def reminder_manager(self):
+        """惰性初始化 ReminderManager（首次访问时创建）。"""
+        if not hasattr(self, "_reminder_manager"):
+            self._reminder_manager = reminderslib.ReminderManager(self)
+        return self._reminder_manager
+
+    def check_reminders(self, phase, **ctx):
+        """运行指定 phase 的提醒检测器，返回提醒文本列表。
+
+        三个 phase：
+        - "pre_model"：模型调用前 —— 检测探索循环、过多读取、上下文压力、连续错误
+        - "post_model"：模型返回 final 后 —— 检测过早完成、空答案、过早停止
+        - "post_tool"：工具执行后 —— 检测 shell 超时
+
+        返回 list[str]，由 AgentLoop 以 `role: user` 注入 history。
+        """
+        if not self.feature_enabled("reminders"):
+            return []
+        return self.reminder_manager.check(phase, **ctx)
 
     @staticmethod
     def new_task_id():
@@ -628,13 +694,51 @@ class Pico:
     def tool_delegate(self, args):
         return toolkit.tool_delegate(self.tool_context(), args)
 
+    @property
+    def active_plan(self):
+        """读取 .pico/plans/ 中最新的计划文件内容。
+
+        如果存在计划文件，ContextManager 会将其注入 prompt prefix。
+        用户编辑计划文件后，下一次 ask() 自动生效。
+        """
+        return planlib.latest_plan_text(self.root)
+
+    def clear_active_plan(self):
+        """清除所有计划文件（执行完成后调用）。"""
+        planlib.clear_plans(self.root)
+
+    @property
+    def approval_store(self):
+        """惰性初始化 ApprovalStore。"""
+        if not hasattr(self, "_approval_store"):
+            self._approval_store = approvallib.ApprovalStore(self.root)
+        return self._approval_store
+
     def approve(self, name, args):
+        """多级审批决策：持久化规则 > 全局策略 > 交互询问。
+
+        安全设计（OPENDEV Lesson 3）：
+        - 持久化规则优先 —— 用户对特定命令的信任决策被记住
+        - 危险命令内置黑名单（rm -rf、sudo、chmod 777 等）始终拒绝
+        - 全局策略（auto/ask/never）作为兜底
+        """
         if self.read_only:
             return False
+
+        # 第一级：持久化规则
+        decision = self.approval_store.match(name, args)
+        if decision == "auto":
+            return True
+        if decision == "never":
+            return False
+
+        # 第二级：全局策略
         if self.approval_policy == "auto":
             return True
         if self.approval_policy == "never":
             return False
+
+        # 第三级：交互询问
         try:
             answer = input(f"approve {name} {json.dumps(args, ensure_ascii=True)}? [y/N] ")
         except EOFError:
