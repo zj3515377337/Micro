@@ -1,244 +1,233 @@
 # Micro
 
-轻量级终端 AI 编码助手，基于 [Pico](https://github.com/htxoffical/pico) 进行了 12 项系统性架构增强。
+> 基于复合 AI 系统理论的高性能终端编码助手——支持多角色模型协作、自适应上下文工程与纵深安全防御
 
-支持多模型协作（Thinking / Critique / Planner），兼容 DeepSeek / OpenAI / Anthropic / MIMO / Ollama 等多厂商 API。零外部依赖，仅需 Python 3.10+。
+Micro 是一个轻量级终端 AI 编码助手，核心特色是实现了 **Thinking / Critique / Planner / Action 四角色多模型协作架构**。每个角色可独立配置不同厂商的 LLM，在成本、延迟与质量之间自由权衡。
+
+**技术渊源**：本项目在分析 [OPENDEV](https://arxiv.org/abs/2603.05344)、[MSR 2026 编码智能体实证研究](https://arxiv.org/abs/2601.13597)、[Duke 长上下文智能体](https://arxiv.org/abs/2603.20432)、[13 智能体架构分类学](https://arxiv.org/abs/2604.03515) 等前沿工作的基础上，对开源项目 Pico 进行了 12 项系统性架构增强，将"复合 AI 系统"理论落地为可工程实现的模式语言。
+
+**零外部依赖**，仅需 Python 3.10+ 标准库。
+
+## 架构创新
+
+### 四角色多模型协作
+
+```
+用户请求
+  │
+  ├─ [Planner]   /plan 命令触发，Schema gating 只读探索，输出结构化计划
+  │
+  └─ 每轮迭代 ──────────────────────────────────────
+       │
+       ├─ [Thinking]   独立推理模型，无工具压力做纯分析
+       │   配置：PICO_THINKING_MODEL
+       │
+       ├─ [Critique]   审视 Thinking 输出 + 最近工具结果
+       │   配置：PICO_CRITIQUE_MODEL（未配 → 回退 Thinking）
+       │
+       └─ [Action]     实际执行工具调用
+           配置：PICO_{PROVIDER}_MODEL
+```
+
+### 12 项系统性改进
+
+#### 安全与护栏
+
+| # | 改进 | 关键技术点 |
+|---|------|-----------|
+| 1 | **死循环检测** | MD5 指纹追踪最近 20 次调用 → 相同 ≥3 次拦截；重复读取拦截（≥4 次）；shell 试错循环检测 |
+| 2 | **System Reminders** | 9 个事件检测器，以 `role: user` 在决策点注入提醒（OPENDEV 实验证明合规率显著高于 system 消息） |
+| 3 | **审批持久化** | 三级决策链（持久化规则 → 全局策略 → 交互询问）；4 类匹配规则；7 条内置危险命令黑名单 |
+| 4 | **大输出 Offloading** | 超 16000 字符自动写入 scratch 文件，对话仅保留预览 + 引用路径 |
+
+#### 上下文工程
+
+| # | 改进 | 关键技术点 |
+|---|------|-----------|
+| 5 | **5 阶段自适应压缩** | Stage 1(≥70%) 警告 → Stage 2(≥80%) 观察遮蔽 → Stage 2.5(≥85%) 快速修剪 → Stage 3(≥90%) 激进遮蔽 → Stage 4(≥99%) 全量压缩 |
+| 6 | **Thinking 分离** | 独立模型做纯推理（无工具定义），避免"匆忙行动"偏差；≥4 步自动启用 |
+| 7 | **Self-Critique** | 审视 Thinking 输出 + 工具结果，检查遗漏和误读；≥6 步自动启用 |
+
+#### 编辑与扩展
+
+| # | 改进 | 关键技术点 |
+|---|------|-----------|
+| 8 | **Fuzzy Patch Matching** | 6 阶段渐进匹配（精确→trim→行→空白行→上下文锚定→编辑距离），解决 LLM "输出差一点点"的固有问题 |
+| 9 | **Plan Mode** | Schema gating（Planner 物理上无写工具）；交互确认流程 `[Y/n/e]`；计划自动注入执行上下文 |
+| 10 | **工具集扩展** | 新增 file_info / glob / grep_count / git_diff / git_log |
+
+#### 记忆与协作
+
+| # | 改进 | 关键技术点 |
+|---|------|-----------|
+| 11 | **ACE Playbook** | 4 类信号自动提取（编辑修正/用户偏好/测试命令/核心文件）；跨会话去重；Project Knowledge 自动注入 prompt |
+| 12 | **多模型角色配置** | Action / Thinking / Critique / Planner 四角色可独立指定 provider + model + api_key + api_base |
+
+## 设计原则
+
+所有改进遵循 OPENDEV 论文提炼的 5 条跨切面教训：
+
+1. **Context 是预算，不是缓冲区** —— 用 API 报告的 token 数校准，渐进压缩远胜单次紧急压缩
+2. **在决策点注入提醒，而非提前布道** —— System prompt 在 30+ 轮后被遗忘，`role: user` 短提醒在关键时刻介入
+3. **架构约束实现安全** —— Schema gating（让危险工具不可见）比 Runtime check（事后阻止）更鲁棒
+4. **为"近似输出"设计工具** —— 6 阶段 fuzzy matching + 可执行错误信息
+5. **懒加载 + 有界增长** —— 每个随会话增长的资源都有硬上限
 
 ## 快速开始
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/yourname/micro.git
-cd micro
+# 1. 克隆
+git clone https://github.com/yourname/micro.git && cd micro
 
-# 2. 创建虚拟环境（可选但推荐）
-conda create -n micro python=3.12 -y
-conda activate micro
+# 2. 创建环境（可选）
+conda create -n micro python=3.12 -y && conda activate micro
 
-# 3. 安装（开发模式）
+# 3. 安装
 pip install -e .
 
-# 4. 配置 API
-cp .env.example .env
-# 编辑 .env，填入至少一个 provider 的 API key
+# 4. 配置 .env
+cp .env.example .env   # 编辑填入 API key
 
 # 5. 运行
 micro "列出当前项目目录结构"
 ```
 
-## 配置
+## 配置指南
 
-### 基本配置（`.env`）
+### 基础：单模型运行
 
 ```bash
-# 默认 provider（openai / anthropic / deepseek / ollama）
+# .env — 只需配一个 provider
 PICO_PROVIDER=deepseek
-
-# DeepSeek（默认推荐）
-PICO_DEEPSEEK_API_BASE=https://api.deepseek.com/anthropic
 PICO_DEEPSEEK_API_KEY=sk-xxx
 PICO_DEEPSEEK_MODEL=deepseek-v4-pro
-
-# OpenAI
-PICO_OPENAI_API_BASE=https://api.openai.com/v1
-PICO_OPENAI_API_KEY=sk-xxx
-PICO_OPENAI_MODEL=gpt-4o
-
-# Anthropic
-PICO_ANTHROPIC_API_BASE=https://api.anthropic.com
-PICO_ANTHROPIC_API_KEY=sk-ant-xxx
-PICO_ANTHROPIC_MODEL=claude-sonnet-4-6
-
-# Ollama（本地模型）
-PICO_PROVIDER=ollama
-# 默认使用 localhost:11434 的 qwen3.5:4b
 ```
 
-### 多角色模型（可选）
-
-每个角色可以独立指定模型甚至 API 厂商：
+### 进阶：多角色跨厂商
 
 ```bash
-# Thinking：纯推理阶段使用的模型（≥4 步自动启用）
-PICO_THINKING_MODEL=deepseek-chat
-# PICO_THINKING_PROVIDER=openai          # 可选：独立指定 provider
-# PICO_THINKING_API_KEY=sk-xxx           # 可选：独立 API key
-
-# Critique：审视 Thinking 输出的模型（≥6 步自动启用，未配则回退 Thinking）
-# PICO_CRITIQUE_MODEL=deepseek-chat
-
-# Planner：/plan 命令使用的模型（未配则回退 Thinking）
-# PICO_PLANNER_MODEL=claude-sonnet-4-6
-# PICO_PLANNER_PROVIDER=anthropic        # 跨厂商示例
-# PICO_PLANNER_API_KEY=sk-ant-xxx
-```
-
-### 跨厂商配置示例
-
-```bash
-# Action 用 DeepSeek，Thinking 用 MIMO，Planner 用 Claude
+# Action：主力执行
 PICO_PROVIDER=deepseek
 PICO_DEEPSEEK_MODEL=deepseek-v4-pro
 
-PICO_THINKING_PROVIDER=openai
-PICO_THINKING_MODEL=mimo-v2.5-pro
-PICO_THINKING_API_BASE=https://token-plan-cn.xiaomimimo.com/v1
-PICO_THINKING_API_KEY=你的MIMO_KEY
+# Thinking：便宜模型做推理
+PICO_THINKING_MODEL=deepseek-chat
 
+# Critique：用 MIMO 做审查
+PICO_CRITIQUE_PROVIDER=openai
+PICO_CRITIQUE_MODEL=mimo-v2.5-pro
+PICO_CRITIQUE_API_KEY=你的MIMO_KEY
+PICO_CRITIQUE_API_BASE=https://token-plan-cn.xiaomimimo.com/v1
+
+# Planner：最强模型做规划
 PICO_PLANNER_PROVIDER=anthropic
 PICO_PLANNER_MODEL=claude-sonnet-4-6
 PICO_PLANNER_API_KEY=sk-ant-xxx
 ```
 
-## 使用方式
+### 支持的后端
+
+| Provider | API 格式 | 适用模型 |
+|----------|---------|---------|
+| `deepseek` | Anthropic Messages | DeepSeek V3/V4 |
+| `openai` | OpenAI Responses | GPT-4o、MIMO、vLLM 等兼容服务 |
+| `anthropic` | Anthropic Messages | Claude Sonnet/Opus |
+| `ollama` | Ollama Generate | 本地部署模型 |
+
+## 命令行
 
 ### 单次任务
 
 ```bash
-# 基本用法
-micro "修复 tests/ 目录下的失败测试"
-
-# 指定步数和审批策略
-micro "重构 src/utils.py 中的工具函数" --max-steps 8 --approval auto
-
-# 指定 provider 和模型
-micro "检查代码中的安全问题" --provider anthropic --model claude-sonnet-4-6
+micro "修复 tests/test_user.py 中的失败测试" --max-steps 8
+micro "检查项目安全问题" --provider anthropic --approval auto
 ```
 
-### 交互模式（REPL）
+### 交互模式
 
 ```bash
-micro
-
-# 进入交互模式后可用命令：
-micro> /help              # 查看帮助
-micro> /plan <任务描述>    # 先规划再执行（Plan Mode）
-micro> /approve list      # 查看持久化审批规则
-micro> /approve add PREFIX "pytest" auto  # 添加自动审批规则
-micro> /approve remove 3  # 删除第 3 条规则
-micro> /memory            # 查看工作记忆
-micro> /session           # 查看会话文件路径
-micro> /reset             # 清空当前会话
-micro> /exit              # 退出
+micro                          # 进入 REPL
+micro> /plan "重构认证模块"     # Plan Mode：先规划，交互确认后执行
+micro> /approve list           # 查看审批规则
+micro> /approve add PREFIX "pytest" auto
+micro> /memory                 # 查看工作记忆
+micro> /reset                  # 清空会话
 ```
 
-### 命令行参数
+### 参数表
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--max-steps` | 最大工具调用次数 | 6 |
-| `--approval` | 审批策略（auto/ask/never） | ask |
-| `--provider` | 模型后端 | PICO_PROVIDER 或 deepseek |
-| `--model` | 模型名称 | 按 provider 选择 |
-| `--thinking-model` | Thinking 阶段模型 | PICO_THINKING_MODEL |
-| `--cwd` | 工作目录 | 当前目录 |
-| `--temperature` | 采样温度 | 0.2 |
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--max-steps` | 最大步数 | 6 |
+| `--approval` | 审批策略 auto/ask/never | ask |
+| `--provider` | 模型后端 | PICO_PROVIDER |
+| `--model` | 模型名 | 按 provider |
+| `--thinking-model` | Thinking 模型 | PICO_THINKING_MODEL |
+| `--cwd` | 工作目录 | . |
 
-## 架构改进
+## 工具集（12 个）
 
-基于 [OPENDEV (arXiv:2603.05344)](https://arxiv.org/abs/2603.05344) 等前沿论文，在原 Pico 基础上实现了 12 项系统性增强：
+| 工具 | 说明 | 风险 |
+|------|------|:--:|
+| `list_files` | 列出目录 | 低 |
+| `read_file` | 按行读取文件 | 低 |
+| `search` | 搜索内容（优先 ripgrep） | 低 |
+| `file_info` | 文件大小/行数/修改时间 | 低 |
+| `glob` | 按模式匹配文件 | 低 |
+| `grep_count` | 统计匹配数（不返回内容） | 低 |
+| `git_diff` | 工作区变更 | 低 |
+| `git_log` | 提交历史 | 低 |
+| `run_shell` | 执行 shell 命令 | **高** |
+| `write_file` | 写入文件 | **高** |
+| `patch_file` | 模糊匹配替换（6 阶段） | **高** |
+| `delegate` | 派生子 agent 调查 | 低 |
 
-### 护栏增强（Phase 1）
+## 技术指标
 
-| 改进 | 说明 |
-|------|------|
-| 死循环检测 | MD5 指纹追踪最近 20 次工具调用，相同 ≥3 次即拦截；同一文件重复读取 ≥4 次警告；shell 命令试错循环检测 |
-| System Reminders | 9 个事件检测器，在模型注意力衰减时以 `role: user` 注入简短提醒，每类有触发上限防止噪声 |
-| 大输出 Offloading | 工具输出超过 16000 字符自动写入 scratch 文件，对话中仅保留预览，节省上下文 70% |
-| 审批持久化 | 三级决策链（持久化规则 → 全局策略 → 交互询问），支持 4 类规则（COMMAND/PREFIX/PATTERN/DANGER），7 条内置危险命令黑名单 |
-
-### 上下文工程（Phase 2）
-
-| 改进 | 说明 |
-|------|------|
-| 5 阶段自适应压缩 | 70%→80%→85%→90%→99% 渐进式压缩，从观察遮蔽到快速修剪到激进遮蔽，保护窗口动态调整 |
-| Thinking 分离 | 独立模型做纯推理（无工具压力），输出注入为 Action 上下文，≥4 步自动启用 |
-| Self-Critique | 审视 Thinking 输出和最近工具结果，检查遗漏和误判，≥6 步自动启用 |
-
-### 架构扩展（Phase 3）
-
-| 改进 | 说明 |
-|------|------|
-| Plan Mode | Schema gating 只读 Planner，输出 7 节结构化计划，交互确认后执行 |
-| Fuzzy Patch | 6 阶段渐进匹配（精确→trim→行→空白→锚定→编辑距离），解决 LLM 输出"差一点点"的问题 |
-| 工具扩展 | 新增 5 个只读工具：file_info / glob / grep_count / git_diff / git_log（7→12） |
-
-### 记忆与协作（Phase 4）
-
-| 改进 | 说明 |
-|------|------|
-| ACE Playbook | 4 类信号（编辑修正/用户偏好/测试命令/核心文件）自动提取，跨会话去重，Project Knowledge 自动注入 |
-| 多模型角色 | Action / Thinking / Critique / Planner 四角色独立配置，支持跨 API 厂商分工 |
-
-## 工具清单
-
-| 工具 | 参数 | 风险 | 说明 |
-|------|------|:--:|------|
-| `list_files` | path | 低 | 列出目录内容 |
-| `read_file` | path, start, end | 低 | 按行范围读取文件 |
-| `search` | pattern, path | 低 | 搜索文件内容（优先 rg） |
-| `file_info` | path | 低 | 文件大小、行数、修改时间 |
-| `glob` | pattern | 低 | 按模式匹配文件路径 |
-| `grep_count` | pattern, path | 低 | 统计匹配数不返回内容 |
-| `git_diff` | staged | 低 | 显示工作区变更 |
-| `git_log` | n, path | 低 | 显示提交历史 |
-| `run_shell` | command, timeout | **高** | 执行 shell 命令 |
-| `write_file` | path, content | **高** | 写入文件 |
-| `patch_file` | path, old_text, new_text | **高** | 模糊匹配替换（6 阶段） |
-| `delegate` | task, max_steps | 低 | 派生子 agent 调查 |
+```
+单元测试:     126 passed（新增 67 个）
+回归基准:     12/12 通过
+端到端评测:   8/8 任务成功
+平均效率:     3.5 步/任务，26s/任务
+上下文控制:   46% 预算利用率（12000 字符框架下平均 5530 字符）
+模型兼容:     DeepSeek / OpenAI / Anthropic / MIMO / Ollama
+外部依赖:     0（仅 Python 3.10+ 标准库）
+```
 
 ## 项目结构
 
 ```
 micro/
 ├── agent_loop.py       # 控制循环（感知→思考→审查→决策→行动）
-├── cli.py              # CLI 入口、参数解析、REPL 交互
-├── config.py           # .env 加载和配置解析
+├── cli.py              # CLI + REPL
 ├── context_manager.py  # 5 阶段自适应上下文压缩
-├── prompt_prefix.py    # 稳定 System Prompt 前缀
-├── runtime.py          # Micro 核心类
-├── security.py         # 密钥脱敏、shell 环境过滤
-├── tool_executor.py    # 工具执行器（校验/审批/死循环检测/offload）
-├── tools.py            # 12 个工具定义
-├── workspace.py        # Git 工作区快照
+├── reminders.py        # System Reminders（9 检测器）
+├── doom_loop.py        # 死循环检测（MD5 指纹 + 3 层）
 ├── approval_store.py   # 审批规则持久化
-├── doom_loop.py        # 死循环检测
-├── plan_mode.py        # Plan Mode 交互式规划
-├── reminders.py        # System Reminders
-├── evaluation/         # Benchmark 评测框架
+├── plan_mode.py        # Plan Mode（Schema gating）
+├── tools.py            # 12 个工具
+├── tool_executor.py    # 工具执行器（校验/审批/检测/offload）
+├── runtime.py          # Micro 核心类
+├── security.py         # 密钥脱敏 + shell env 过滤
+├── workspace.py        # Git 工作区快照
 ├── features/
 │   └── memory.py       # 三层记忆 + ACE Playbook
-└── providers/
-    └── clients.py      # 4 种模型后端适配
+├── providers/
+│   └── clients.py      # 模型后端适配
+├── evaluation/         # Benchmark 框架（12 个回归任务）
+└── benchmarks/         # 性能评测任务 + 报告生成
 ```
-
-## 运行测试
-
-```bash
-# 全部测试
-python -m pytest tests/ -v
-
-# 跳过环境依赖测试
-python -m pytest tests/ -v -k "not test_trace_and_report_redact"
-
-# 仅核心测试
-python -m pytest tests/test_micro.py -v
-```
-
-## 技术指标
-
-- 零外部依赖（Python 3.10+，仅标准库 `urllib` / `subprocess` / `json`）
-- 126 个单元测试
-- 12 个 Benchmark 回归任务
-- 兼容 OpenAI / Anthropic / DeepSeek / MIMO / Ollama API
-- 支持 Windows / macOS / Linux
 
 ## 参考资料
 
-- [OPENDEV: Building Effective AI Coding Agents for the Terminal](https://arxiv.org/abs/2603.05344)
-- [Coding Agents are Effective Long-Context Processors](https://arxiv.org/abs/2603.20432)
-- 原项目 [Pico](https://github.com/htxoffical/pico)
+- Bui, N. D. Q. *Building Effective AI Coding Agents for the Terminal: Scaffolding, Harness, Context Engineering, and Lessons Learned.* arXiv:2603.05344, 2026.
+- Agarwal, S., He, H., & Vasilescu, B. *AI IDEs or Autonomous Agents? Measuring the Impact of Coding Agents on Software Development.* MSR 2026.
+- Cao, W., Yin, X., Dhingra, B., & Zhou, S. *Coding Agents are Effective Long-Context Processors.* arXiv:2603.20432, 2026.
+- Rombaut, B. *Inside the Scaffold: A Source-Code Taxonomy of Coding Agent Architectures.* arXiv:2604.03515, 2026.
+- Ogenrwot, D., & Businge, J. *How AI Coding Agents Modify Code: A Large-Scale Study of GitHub Pull Requests.* MSR 2026.
+- Zaharia, M., et al. *The Shift from Models to Compound AI Systems.* BAIR Blog, 2024.
+- Mei, K., et al. *A Formal Framework for Context Engineering in LLM-based Systems.* 2025.
 
 ## License
 
-MIT
+MIT. 本项目在 [Pico](https://github.com/htxoffical/pico) 基础上进行了实质性架构改进。
